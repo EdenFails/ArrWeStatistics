@@ -17,6 +17,7 @@ services:
       - CACHE_TTL_SECONDS=10
     volumes:
       - ./data:/app/data
+      # - /mnt/storage:/storage:ro # Optional: Mount your MergerFS pool or host drive for disk & subfolder monitoring
     extra_hosts:
       - "host.docker.internal:host-gateway"
     deploy:

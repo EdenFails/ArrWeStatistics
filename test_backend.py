@@ -156,6 +156,29 @@ def run_tests():
         assert get_pref.json().get("theme") == "dark"
         print("[+] Test 4.10 Passed: UI preferences set and retrieved.")
 
+        # Test storage mounts
+        storage_create = client.post(
+            "/api/storage",
+            json={
+                "name": "Media Pool",
+                "mount_path": tempfile.gettempdir(),
+                "display_order": 0,
+                "is_enabled": 1,
+                "folders": ["test_sub1", "test_sub2"],
+            },
+            headers=headers,
+        )
+        assert storage_create.status_code == 201, f"Storage creation failed: {storage_create.text}"
+        smid = storage_create.json()["id"]
+
+        storage_list = client.get("/api/storage", headers=headers)
+        assert storage_list.status_code == 200
+        pools = storage_list.json()
+        assert len(pools) >= 1
+        assert pools[0]["name"] == "Media Pool"
+        assert pools[0]["total_bytes"] > 0
+        print("[+] Test 4.10.1 Passed: Storage pool creation and disk_usage telemetry verified.")
+
         resp_headers = health_res.headers
         assert resp_headers.get("x-content-type-options") == "nosniff"
         assert resp_headers.get("x-frame-options") == "DENY"

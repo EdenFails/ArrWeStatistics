@@ -154,33 +154,49 @@ async def pull_qbittorrent(client: httpx.AsyncClient, svc: dict) -> dict:
     active_count = 0
 
     active_items = []
+    all_items = []
 
-    for _, t in torrents.items():
+    for h, t in torrents.items():
         st = t.get("state", "").lower()
         dl_spd = t.get("dlspeed", 0)
         up_spd = t.get("upspeed", 0)
+        prog = round(t.get("progress", 0) * 100, 1)
 
-        if "downloading" in st or "dl" in st:
+        is_dl = "downloading" in st or "dl" in st
+        is_up = "uploading" in st or "stalledup" in st or "up" in st
+        is_paused = "paused" in st
+        is_completed = t.get("progress", 0) >= 1.0
+
+        if is_dl:
             dl_count += 1
-        if "uploading" in st or "stalledup" in st or "up" in st:
+        if is_up:
             up_count += 1
-        if "paused" in st:
+        if is_paused:
             paused_count += 1
-        if t.get("progress", 0) >= 1.0:
+        if is_completed:
             done_count += 1
         if dl_spd > 0 or up_spd > 0:
             active_count += 1
 
+        item_dict = {
+            "hash": h,
+            "name": t.get("name", "Unknown"),
+            "size": t.get("size", 0),
+            "progress": prog,
+            "dlspeed": dl_spd,
+            "upspeed": up_spd,
+            "eta": t.get("eta", 0),
+            "state": st,
+            "ratio": round(float(t.get("ratio", 0)), 2),
+            "category": t.get("category", "") or "default",
+            "num_seeds": t.get("num_seeds", 0),
+            "num_leechs": t.get("num_leechs", 0),
+        }
+
         if (dl_spd > 0 or up_spd > 0) and len(active_items) < 15:
-            active_items.append({
-                "name": t.get("name", "Unknown"),
-                "size": t.get("size", 0),
-                "progress": round(t.get("progress", 0) * 100, 1),
-                "dlspeed": dl_spd,
-                "upspeed": up_spd,
-                "eta": t.get("eta", 0),
-                "state": st,
-            })
+            active_items.append(item_dict)
+
+        all_items.append(item_dict)
 
     return {
         "dl_speed_bytes": state.get("dl_info_speed", 0),
@@ -199,6 +215,7 @@ async def pull_qbittorrent(client: httpx.AsyncClient, svc: dict) -> dict:
             "completed": done_count,
         },
         "active_items": active_items,
+        "all_items": all_items,
     }
 
 

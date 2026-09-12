@@ -81,79 +81,156 @@
         <div id="cards-container" class="cards-grid">
           <div class="empty-state">No services registered or active. Open Services menu to configure targets.</div>
         </div>
+
+        <div class="storage-section" style="margin-top: 24px;">
+          <div class="section-title" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <span>STORAGE POOLS &amp; VOLUMES</span>
+            <button id="btn-open-storage-modal" class="btn btn-sm">+ ADD DRIVE / POOL</button>
+          </div>
+          <div id="storage-container" class="cards-grid">
+            <div class="empty-state">No storage pools configured. Click "+ ADD DRIVE / POOL" to monitor your MergerFS or host drives.</div>
+          </div>
+        </div>
       </main>
     </div>
 
+    <!-- Service Detail Drill-Down Modal -->
+    <div id="overlay-service-detail" class="overlay hidden">
+      <div class="overlay-dialog overlay-dialog-wide">
+        <div class="dialog-header">
+          <div class="dialog-title" id="detail-title">SERVICE DETAILS</div>
+          <button id="btn-close-detail" class="btn-close" aria-label="Close">X</button>
+        </div>
+        <div class="dialog-body" id="detail-body">
+          <!-- Dynamically populated by UI.renderDetailView -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Configuration Settings Modal -->
     <div id="overlay-settings" class="overlay hidden">
       <div class="overlay-dialog">
         <div class="dialog-header">
-          <div class="dialog-title">SERVICE CONFIGURATION</div>
+          <div class="dialog-title">CONFIGURATION</div>
           <button id="btn-close-settings" class="btn-close" aria-label="Close">X</button>
         </div>
 
+        <div class="tab-nav">
+          <button id="tab-btn-services" class="tab-btn active">SERVICES</button>
+          <button id="tab-btn-storage" class="tab-btn">STORAGE POOLS</button>
+        </div>
+
         <div class="dialog-body">
-          <div class="section-title">ACTIVE TARGETS</div>
-          <div id="services-list" class="services-table"></div>
+          <!-- Services Configuration Panel -->
+          <div id="tab-panel-services">
+            <div class="section-title">ACTIVE TARGETS</div>
+            <div id="services-list" class="services-table"></div>
 
-          <div class="section-title">REGISTER SERVICE</div>
-          <form id="form-add-service">
-            <div class="form-grid">
-              <div class="form-group">
-                <label for="svc-name">NAME</label>
-                <input type="text" id="svc-name" class="input-text" placeholder="qBittorrent" required>
+            <div class="section-title" style="margin-top: 16px;">REGISTER SERVICE</div>
+            <form id="form-add-service">
+              <div class="form-grid">
+                <div class="form-group">
+                  <label for="svc-name">NAME</label>
+                  <input type="text" id="svc-name" class="input-text" placeholder="qBittorrent" required>
+                </div>
+                <div class="form-group">
+                  <label for="svc-type">TYPE</label>
+                  <select id="svc-type" class="input-select" required>
+                    <option value="qbittorrent">qBittorrent</option>
+                    <option value="sabnzbd">SABnzbd</option>
+                    <option value="jellyfin">Jellyfin</option>
+                    <option value="jellyseer">Jellyseerr</option>
+                  </select>
+                </div>
               </div>
-              <div class="form-group">
-                <label for="svc-type">TYPE</label>
-                <select id="svc-type" class="input-select" required>
-                  <option value="qbittorrent">qBittorrent</option>
-                  <option value="sabnzbd">SABnzbd</option>
-                  <option value="jellyfin">Jellyfin</option>
-                  <option value="jellyseer">Jellyseerr</option>
-                </select>
-              </div>
-            </div>
 
-            <div class="form-grid">
-              <div class="form-group">
-                <label for="svc-url">BASE URL</label>
-                <input type="text" id="svc-url" class="input-text" placeholder="http://host.docker.internal:8085 or LAN IP" required>
+              <div class="form-grid">
+                <div class="form-group">
+                  <label for="svc-url">BASE URL</label>
+                  <input type="text" id="svc-url" class="input-text" placeholder="http://gluetun:8085 or LAN IP" required>
+                </div>
+                <div class="form-group">
+                  <label for="svc-order">DISPLAY ORDER</label>
+                  <input type="number" id="svc-order" class="input-text" value="0">
+                </div>
               </div>
-              <div class="form-group">
-                <label for="svc-order">DISPLAY ORDER</label>
-                <input type="number" id="svc-order" class="input-text" value="0">
+
+              <!-- API Key field -->
+              <div class="form-group" id="grp-svc-apikey">
+                <label for="svc-apikey">API KEY</label>
+                <input type="password" id="svc-apikey" class="input-text" placeholder="Auth key / API token">
               </div>
-            </div>
 
-            <!-- API Key field: shown for SABnzbd, Jellyfin, Jellyseerr -->
-            <div class="form-group hidden" id="grp-svc-apikey">
-              <label for="svc-apikey">API KEY</label>
-              <input type="password" id="svc-apikey" class="input-text" placeholder="Service API key / token">
-            </div>
-
-            <!-- Credentials fields: shown for qBittorrent -->
-            <div class="form-grid" id="grp-svc-auth">
-              <div class="form-group">
-                <label for="svc-user">USERNAME</label>
-                <input type="text" id="svc-user" class="input-text" placeholder="qBittorrent username">
+              <!-- Credentials fields -->
+              <div class="form-grid" id="grp-svc-auth">
+                <div class="form-group">
+                  <label for="svc-user">USERNAME</label>
+                  <input type="text" id="svc-user" class="input-text" placeholder="Username">
+                </div>
+                <div class="form-group">
+                  <label for="svc-password">PASSWORD</label>
+                  <input type="password" id="svc-password" class="input-text" placeholder="Password">
+                </div>
               </div>
-              <div class="form-group">
-                <label for="svc-password">PASSWORD</label>
-                <input type="password" id="svc-password" class="input-text" placeholder="qBittorrent password">
+
+              <div class="form-group form-checkbox">
+                <label>
+                  <input type="checkbox" id="svc-enabled" checked> ENABLE TELEMETRY POLLING
+                </label>
               </div>
-            </div>
 
-            <div class="form-group form-checkbox">
-              <label>
-                <input type="checkbox" id="svc-enabled" checked> ENABLE TELEMETRY POLLING
-              </label>
-            </div>
+              <div id="service-feedback" class="form-feedback hidden"></div>
+              <div style="display: flex; gap: 8px; margin-top: 14px;">
+                <button type="button" id="btn-test-service" class="btn">TEST CONNECTION</button>
+                <button type="submit" id="btn-save-service" class="btn btn-primary" style="flex: 1;">TEST & SAVE</button>
+              </div>
+            </form>
+          </div>
 
-            <div id="service-feedback" class="form-feedback hidden"></div>
-            <div style="display: flex; gap: 8px; margin-top: 14px;">
-              <button type="button" id="btn-test-service" class="btn">TEST CONNECTION</button>
-              <button type="submit" id="btn-save-service" class="btn btn-primary" style="flex: 1;">TEST & SAVE</button>
-            </div>
-          </form>
+          <!-- Storage Pools Configuration Panel -->
+          <div id="tab-panel-storage" class="hidden">
+            <div class="section-title">CONFIGURED STORAGE POOLS</div>
+            <div id="storage-list" class="services-table"></div>
+
+            <div class="section-title" style="margin-top: 16px;">REGISTER STORAGE POOL</div>
+            <form id="form-add-storage">
+              <div class="form-grid">
+                <div class="form-group">
+                  <label for="storage-name">DRIVE / POOL NAME</label>
+                  <input type="text" id="storage-name" class="input-text" placeholder="MergerFS Storage" required>
+                </div>
+                <div class="form-group">
+                  <label for="storage-order">DISPLAY ORDER</label>
+                  <input type="number" id="storage-order" class="input-text" value="0">
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="storage-path">MOUNT PATH (CONTAINER PATH)</label>
+                <input type="text" id="storage-path" class="input-text" placeholder="/storage or /mnt/storage" required>
+                <span style="font-size: 10px; color: var(--text-dim); margin-top: 2px;">
+                  Note: In Docker, ensure this folder is mounted into ArrWeStatistics in docker-compose.yml (e.g. - /mnt/storage:/storage:ro).
+                </span>
+              </div>
+
+              <div class="form-group">
+                <label for="storage-folders">WATCHED SUBFOLDERS (COMMA-SEPARATED)</label>
+                <input type="text" id="storage-folders" class="input-text" placeholder="movies, series, anime, downloads">
+                <span style="font-size: 10px; color: var(--text-dim); margin-top: 2px;">
+                  Relative subfolders inside the mount path or absolute paths.
+                </span>
+              </div>
+
+              <div class="form-group form-checkbox">
+                <label>
+                  <input type="checkbox" id="storage-enabled" checked> ENABLE STORAGE MONITORING
+                </label>
+              </div>
+
+              <div id="storage-feedback" class="form-feedback hidden"></div>
+              <button type="submit" id="btn-save-storage" class="btn btn-primary" style="margin-top: 8px;">SAVE STORAGE POOL</button>
+            </form>
+          </div>
         </div>
       </div>
     </div>

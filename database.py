@@ -72,8 +72,25 @@ def init_db() -> None:
         )
     """)
 
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS storage_mounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            mount_path TEXT NOT NULL,
+            display_order INTEGER DEFAULT 0,
+            is_enabled INTEGER DEFAULT 1,
+            folders_json TEXT DEFAULT '[]',
+            last_scanned_ts REAL DEFAULT 0,
+            total_bytes INTEGER DEFAULT 0,
+            used_bytes INTEGER DEFAULT 0,
+            free_bytes INTEGER DEFAULT 0,
+            cached_folders_json TEXT DEFAULT '[]'
+        )
+    """)
+
     c.execute("CREATE INDEX IF NOT EXISTS idx_service_metrics_service_id ON service_metrics(service_id);")
     c.execute("CREATE INDEX IF NOT EXISTS idx_services_display_order ON services(display_order);")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_storage_mounts_order ON storage_mounts(display_order);")
 
     conn.commit()
     conn.close()
@@ -359,6 +376,104 @@ def remove_preference(key: str) -> bool:
     conn.commit()
     conn.close()
     return n > 0
+
+
+def fetch_storage_mounts() -> list[dict]:
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, name, mount_path, display_order, is_enabled, folders_json,
+               last_scanned_ts, total_bytes, used_bytes, free_bytes, cached_folders_json
+        FROM storage_mounts
+        ORDER BY display_order ASC, id ASC
+    """)
+    rows = c.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def fetch_storage_mount_by_id(mid: int) -> dict | None:
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, name, mount_path, display_order, is_enabled, folders_json,
+               last_scanned_ts, total_bytes, used_bytes, free_bytes, cached_folders_json
+        FROM storage_mounts
+        WHERE id = ?
+    """, (mid,))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def insert_storage_mount(
+    name: str,
+    mount_path: str,
+    display_order: int = 0,
+    is_enabled: int = 1,
+    folders_json: str = "[]",
+) -> int:
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO storage_mounts (name, mount_path, display_order, is_enabled, folders_json)
+        VALUES (?, ?, ?, ?, ?)
+    """, (name, mount_path, display_order, is_enabled, folders_json))
+    mid = c.lastrowid
+    conn.commit()
+    conn.close()
+    return int(mid)
+
+
+def modify_storage_mount(
+    mid: int,
+    name: str,
+    mount_path: str,
+    display_order: int = 0,
+    is_enabled: int = 1,
+    folders_json: str = "[]",
+) -> bool:
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        UPDATE storage_mounts
+        SET name = ?, mount_path = ?, display_order = ?, is_enabled = ?, folders_json = ?
+        WHERE id = ?
+    """, (name, mount_path, display_order, is_enabled, folders_json, mid))
+    n = c.rowcount
+    conn.commit()
+    conn.close()
+    return n > 0
+
+
+def remove_storage_mount(mid: int) -> bool:
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("DELETE FROM storage_mounts WHERE id = ?", (mid,))
+    n = c.rowcount
+    conn.commit()
+    conn.close()
+    return n > 0
+
+
+def update_storage_stats(
+    mid: int,
+    total_bytes: int,
+    used_bytes: int,
+    free_bytes: int,
+    cached_folders_json: str,
+    last_scanned_ts: float,
+) -> None:
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        UPDATE storage_mounts
+        SET total_bytes = ?, used_bytes = ?, free_bytes = ?,
+            cached_folders_json = ?, last_scanned_ts = ?
+        WHERE id = ?
+    """, (total_bytes, used_bytes, free_bytes, cached_folders_json, last_scanned_ts, mid))
+    conn.commit()
+    conn.close()
 
 
 connect_db = get_conn

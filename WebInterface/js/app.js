@@ -3,6 +3,10 @@ const state = {
   isAuthenticated: false,
   services: [],
   telemetry: [],
+  storagePools: [],
+  selectedServiceDetailId: null,
+  detailFilter: 'all',
+  detailSearch: '',
   pollTimer: null,
   pollIntervalMs: 5000,
 };
@@ -60,6 +64,7 @@ async function checkInitStatus() {
       showView('dashboard');
       startPolling();
       loadServices();
+      loadStoragePools();
     }
   } catch (err) {
     showView('login');
@@ -82,6 +87,7 @@ async function handleSetupSubmit(e) {
     showView('dashboard');
     startPolling();
     loadServices();
+    loadStoragePools();
   } catch (err) {
     errBox.textContent = err.message;
     errBox.classList.remove('hidden');
@@ -103,6 +109,7 @@ async function handleLoginSubmit(e) {
     showView('dashboard');
     startPolling();
     loadServices();
+    loadStoragePools();
   } catch (err) {
     errBox.textContent = err.message;
     errBox.classList.remove('hidden');
@@ -116,6 +123,7 @@ async function handleLogout() {
   state.isAuthenticated = false;
   stopPolling();
   closeSettings();
+  closeServiceDetail();
   showView('login');
 }
 
@@ -128,6 +136,10 @@ async function pollTelemetry(force = false) {
     state.telemetry = res.telemetry || [];
     renderTelemetryCards();
     updateAggregates();
+    if (state.selectedServiceDetailId) {
+      updateDetailView();
+    }
+    loadStoragePools();
     if (statusTag) {
       statusTag.textContent = 'ACTIVE';
       statusTag.className = 'tag tag-ok';
@@ -429,9 +441,218 @@ async function handleAddService(e) {
   }
 }
 
-function openSettings() {
+// Service Detail Drill-Down Modal Logic
+window.openServiceDetail = function(id) {
+  state.selectedServiceDetailId = id;
+  state.detailFilter = 'all';
+  state.detailSearch = '';
+  const item = state.telemetry.find(t => t.service_id === id);
+  if (!item) return;
+
+  const titleEl = document.getElementById('detail-title');
+  if (titleEl) {
+    titleEl.textContent = `${item.name.toUpperCase()} [${item.service_type.toUpperCase()}]`;
+  }
+  updateDetailView();
+  document.getElementById('overlay-service-detail').classList.remove('hidden');
+};
+
+window.closeServiceDetail = function() {
+  state.selectedServiceDetailId = null;
+  document.getElementById('overlay-service-detail').classList.add('hidden');
+};
+
+window.setDetailFilter = function(filter) {
+  state.detailFilter = filter;
+  updateDetailView();
+};
+
+window.handleDetailSearch = function(q) {
+  state.detailSearch = q;
+  updateDetailView(true);
+};
+
+function updateDetailView(preserveSearchFocus = false) {
+  if (!state.selectedServiceDetailId) return;
+  const item = state.telemetry.find(t => t.service_id === state.selectedServiceDetailId);
+  if (!item) return;
+
+  const bodyEl = document.getElementById('detail-body');
+  if (!bodyEl) return;
+
+  const cursorPosition = preserveSearchFocus ? (document.getElementById('detail-search-input')?.selectionStart || 0) : null;
+  bodyEl.innerHTML = UI.renderDetailView(item, state.detailFilter, state.detailSearch);
+
+  if (preserveSearchFocus) {
+    const input = document.getElementById('detail-search-input');
+    if (input) {
+      input.focus();
+      input.setSelectionRange(cursorPosition, cursorPosition);
+    }
+  }
+}
+
+// Storage Pools Management
+async function loadStoragePools() {
+  if (!state.isAuthenticated) return;
+  try {
+    state.storagePools = await api('/api/storage');
+    renderStorageCards();
+    renderStorageTable();
+  } catch (err) {}
+}
+
+function renderStorageCards() {
+  const container = document.getElementById('storage-container');
+  if (!container) return;
+
+  if (!state.storagePools || state.storagePools.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state">No storage pools configured. Click "+ ADD DRIVE / POOL" to monitor your MergerFS or host drives.</div>
+    `;
+    return;
+  }
+
+  container.innerHTML = state.storagePools.map(pool => UI.renderStorageCard(pool)).join('');
+}
+
+function renderStorageTable() {
+  const box = document.getElementById('storage-list');
+  if (!box) return;
+
+  if (!state.storagePools || state.storagePools.length === 0) {
+    box.innerHTML = `<div class="empty-state" style="padding: 16px;">No storage pools configured.</div>`;
+    return;
+  }
+
+  box.innerHTML = state.storagePools.map(p => `
+    <div class="svc-row">
+      <div class="svc-row-info">
+        <span class="svc-row-name">${esc(p.name)} [${esc(p.mount_path)}]</span>
+        <span class="svc-row-meta">
+          Folders: ${(p.folders || []).map(f => esc(f.name)).join(', ') || 'None'} | ${p.is_enabled ? 'ENABLED' : 'DISABLED'}
+        </span>
+      </div>
+      <div class="svc-row-actions">
+        <button class="btn btn-sm" onclick="scanStorageMountTarget(${p.id}, event)">SCAN</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteStorageMountTarget(${p.id})">DELETE</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+window.scanStorageMountTarget = async function(id, e) {
+  if (e) {
+    e.stopPropagation();
+    if (e.target && e.target.tagName === 'BUTTON') {
+      e.target.disabled = true;
+      e.target.textContent = 'SCANNING...';
+    }
+  }
+  try {
+    await api(`/api/storage/${id}/scan`, { method: 'POST' });
+    await loadStoragePools();
+  } catch (err) {
+    alert(`Scan error: ${err.message}`);
+  }
+};
+
+window.deleteStorageMountTarget = async function(id) {
+  if (!confirm('Delete this storage pool configuration?')) return;
+  try {
+    await api(`/api/storage/${id}`, { method: 'DELETE' });
+    await loadStoragePools();
+  } catch (err) {
+    alert(err.message);
+  }
+};
+
+function showStorageFeedback(text, type = 'error') {
+  const box = document.getElementById('storage-feedback');
+  if (!box) return;
+  box.className = `form-feedback ${type}`;
+  box.textContent = text;
+  box.classList.remove('hidden');
+}
+
+function hideStorageFeedback() {
+  const box = document.getElementById('storage-feedback');
+  if (!box) return;
+  box.className = 'form-feedback hidden';
+  box.textContent = '';
+}
+
+async function handleAddStorage(e) {
+  e.preventDefault();
+  hideStorageFeedback();
+
+  const name = (document.getElementById('storage-name').value || '').trim();
+  const mount_path = (document.getElementById('storage-path').value || '').trim();
+  const foldersRaw = (document.getElementById('storage-folders').value || '').trim();
+  const display_order = parseInt(document.getElementById('storage-order').value || '0', 10);
+  const is_enabled = document.getElementById('storage-enabled').checked ? 1 : 0;
+
+  if (!name || !mount_path) {
+    showStorageFeedback('Pool name and mount path are required.', 'error');
+    return;
+  }
+
+  const folders = foldersRaw
+    ? foldersRaw.split(',').map(s => s.trim()).filter(Boolean)
+    : [];
+
+  const btnSave = document.getElementById('btn-save-storage');
+  if (btnSave) btnSave.disabled = true;
+
+  try {
+    await api('/api/storage', {
+      method: 'POST',
+      body: JSON.stringify({
+        name,
+        mount_path,
+        folders,
+        display_order: isNaN(display_order) ? 0 : display_order,
+        is_enabled,
+      }),
+    });
+
+    showStorageFeedback(`Storage pool "${name}" added successfully!`, 'success');
+    document.getElementById('form-add-storage').reset();
+    document.getElementById('storage-enabled').checked = true;
+    await loadStoragePools();
+  } catch (err) {
+    showStorageFeedback(`Error: ${err.message}`, 'error');
+  } finally {
+    if (btnSave) btnSave.disabled = false;
+  }
+}
+
+// Configuration Tabs
+function switchSettingsTab(tabName) {
+  const tabBtnServices = document.getElementById('tab-btn-services');
+  const tabBtnStorage = document.getElementById('tab-btn-storage');
+  const panelServices = document.getElementById('tab-panel-services');
+  const panelStorage = document.getElementById('tab-panel-storage');
+
+  if (tabName === 'storage') {
+    tabBtnServices.classList.remove('active');
+    tabBtnStorage.classList.add('active');
+    panelServices.classList.add('hidden');
+    panelStorage.classList.remove('hidden');
+    loadStoragePools();
+  } else {
+    tabBtnServices.classList.add('active');
+    tabBtnStorage.classList.remove('active');
+    panelServices.classList.remove('hidden');
+    panelStorage.classList.add('hidden');
+    loadServices();
+  }
+}
+
+function openSettings(defaultTab = 'services') {
   hideServiceFeedback();
-  loadServices();
+  hideStorageFeedback();
+  switchSettingsTab(defaultTab);
   updateServiceFormFields();
   document.getElementById('overlay-settings').classList.remove('hidden');
 }
@@ -448,12 +669,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('btn-manual-poll').addEventListener('click', () => {
     pollTelemetry(true);
+    loadStoragePools();
   });
 
-  document.getElementById('btn-open-settings').addEventListener('click', openSettings);
+  document.getElementById('btn-open-settings').addEventListener('click', () => openSettings('services'));
   document.getElementById('btn-close-settings').addEventListener('click', closeSettings);
   document.getElementById('btn-logout').addEventListener('click', handleLogout);
 
+  // Storage Pool Navigation
+  const btnOpenStorage = document.getElementById('btn-open-storage-modal');
+  if (btnOpenStorage) {
+    btnOpenStorage.addEventListener('click', () => openSettings('storage'));
+  }
+
+  // Tabs
+  const tabBtnServices = document.getElementById('tab-btn-services');
+  if (tabBtnServices) {
+    tabBtnServices.addEventListener('click', () => switchSettingsTab('services'));
+  }
+  const tabBtnStorage = document.getElementById('tab-btn-storage');
+  if (tabBtnStorage) {
+    tabBtnStorage.addEventListener('click', () => switchSettingsTab('storage'));
+  }
+
+  // Forms
   const typeSelect = document.getElementById('svc-type');
   if (typeSelect) {
     typeSelect.addEventListener('change', updateServiceFormFields);
@@ -465,5 +704,21 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   document.getElementById('form-add-service').addEventListener('submit', handleAddService);
+  document.getElementById('form-add-storage').addEventListener('submit', handleAddStorage);
+
+  // Detail Modal Close
+  const btnCloseDetail = document.getElementById('btn-close-detail');
+  if (btnCloseDetail) {
+    btnCloseDetail.addEventListener('click', closeServiceDetail);
+  }
+
+  // Escape key closes modals
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeSettings();
+      closeServiceDetail();
+    }
+  });
+
   updateServiceFormFields();
 });

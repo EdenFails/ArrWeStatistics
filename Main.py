@@ -9,9 +9,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 import httpx
+import json
 
 import database as db
 import auth
+import storage
 from clients import fetch_all_services, fetch_service_data
 
 CACHE_TTL = int(os.getenv("CACHE_TTL_SECONDS", "10"))
@@ -132,6 +134,30 @@ class PreferenceInput(BaseModel):
         s = val.strip()
         if not re.match(r"^[a-zA-Z0-9_\.\-]+$", s):
             raise ValueError("Invalid characters in preference_key")
+        return s
+
+
+class StorageInput(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64)
+    mount_path: str = Field(..., min_length=1, max_length=512)
+    display_order: int = Field(0, ge=0, le=9999)
+    is_enabled: int = Field(1, ge=0, le=1)
+    folders: list[str] | None = None
+
+    @field_validator("name")
+    @classmethod
+    def check_storage_name(cls, val: str) -> str:
+        s = val.strip()
+        if not s:
+            raise ValueError("Storage name cannot be empty")
+        return re.sub(r"[<>]", "", s)
+
+    @field_validator("mount_path")
+    @classmethod
+    def check_path(cls, val: str) -> str:
+        s = val.strip()
+        if not s:
+            raise ValueError("Mount path cannot be empty")
         return s
 
 
@@ -398,6 +424,72 @@ async def delete_preference(key: str, _: bool = Depends(auth.require_auth)):
     if not ok:
         raise HTTPException(status_code=404, detail="Preference key not found")
     return {"success": True, "message": "Preference deleted"}
+
+
+@app.get("/api/storage")
+async def list_storage_mounts(_: bool = Depends(auth.require_auth)):
+    return storage.get_all_storage_data()
+
+
+@app.post("/api/storage", status_code=status.HTTP_201_CREATED)
+async def create_storage_mount(body: StorageInput, _: bool = Depends(auth.require_auth)):
+    clean_folders = [f.strip() for f in (body.folders or []) if f.strip()]
+    folders_json = json.dumps(clean_folders)
+    mid = db.insert_storage_mount(
+        name=body.name,
+        mount_path=body.mount_path,
+        display_order=body.display_order,
+        is_enabled=body.is_enabled,
+        folders_json=folders_json,
+    )
+    await storage.trigger_mount_scan(mid)
+    res = db.fetch_storage_mount_by_id(mid)
+    return res
+
+
+@app.get("/api/storage/{storage_id}")
+async def get_single_storage(storage_id: int, _: bool = Depends(auth.require_auth)):
+    m = db.fetch_storage_mount_by_id(storage_id)
+    if not m:
+        raise HTTPException(status_code=404, detail="Storage mount not found")
+    return m
+
+
+@app.put("/api/storage/{storage_id}")
+async def update_storage_mount(
+    storage_id: int, body: StorageInput, _: bool = Depends(auth.require_auth)
+):
+    clean_folders = [f.strip() for f in (body.folders or []) if f.strip()]
+    folders_json = json.dumps(clean_folders)
+    ok = db.modify_storage_mount(
+        mid=storage_id,
+        name=body.name,
+        mount_path=body.mount_path,
+        display_order=body.display_order,
+        is_enabled=body.is_enabled,
+        folders_json=folders_json,
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="Storage mount not found")
+    await storage.trigger_mount_scan(storage_id)
+    return db.fetch_storage_mount_by_id(storage_id)
+
+
+@app.delete("/api/storage/{storage_id}")
+async def delete_storage_mount(storage_id: int, _: bool = Depends(auth.require_auth)):
+    ok = db.remove_storage_mount(storage_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Storage mount not found")
+    return {"success": True, "message": "Storage mount deleted"}
+
+
+@app.post("/api/storage/{storage_id}/scan")
+async def scan_storage_mount(storage_id: int, _: bool = Depends(auth.require_auth)):
+    m = db.fetch_storage_mount_by_id(storage_id)
+    if not m:
+        raise HTTPException(status_code=404, detail="Storage mount not found")
+    started = await storage.trigger_mount_scan(storage_id)
+    return {"success": True, "started": started}
 
 
 if os.path.isdir(UI_DIR):
