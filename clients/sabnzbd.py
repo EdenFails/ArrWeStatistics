@@ -23,27 +23,57 @@ def get_candidate_urls(base_url: str) -> list[str]:
 
 
 async def pull_sabnzbd(client: httpx.AsyncClient, svc: dict) -> dict:
-    key = svc.get("apikey") or ""
+    key = (svc.get("apikey") or "").strip()
     candidates = get_candidate_urls(svc["base_url"])
     last_err = None
     body = None
-    chosen_url = candidates[0]
+    chosen_endpoint = f"{candidates[0]}/api"
 
     for url in candidates:
-        chosen_url = url
-        endpoint = f"{url}/api"
-        try:
-            r = await client.get(
-                endpoint,
-                params={"mode": "queue", "output": "json", "apikey": key},
-                timeout=5.0,
-            )
-            r.raise_for_status()
-            body = r.json()
+        paths = ["/api", "/sabnzbd/api"] if not url.endswith("/sabnzbd") else ["/api"]
+        for p in paths:
+            endpoint = f"{url}{p}"
+            try:
+                r = await client.get(
+                    endpoint,
+                    params={"mode": "queue", "output": "json", "apikey": key},
+                    headers={
+                        "User-Agent": "ArrWeStatistics/1.0",
+                        "X-Api-Key": key,
+                    },
+                    timeout=5.0,
+                )
+                if r.status_code == 403:
+                    err_msg = r.text.strip()
+                    try:
+                        j = r.json()
+                        if isinstance(j, dict) and "error" in j:
+                            err_msg = j["error"]
+                    except Exception:
+                        pass
+
+                    if "api key" in err_msg.lower() or "apikey" in err_msg.lower():
+                        raise RuntimeError(
+                            f"SABnzbd: {err_msg}. Check your API Key in SABnzbd -> Settings -> General -> Security."
+                        )
+                    if "hostname" in err_msg.lower() or "host" in err_msg.lower():
+                        raise RuntimeError(
+                            f"SABnzbd Host Whitelist: {err_msg}. In SABnzbd -> Settings -> General, add 'gluetun' to 'Host Whitelist'."
+                        )
+                    raise RuntimeError(f"SABnzbd HTTP 403: {err_msg or 'Access Forbidden'}")
+
+                if r.status_code == 404:
+                    continue
+
+                r.raise_for_status()
+                body = r.json()
+                chosen_endpoint = endpoint
+                break
+            except (httpx.ConnectError, httpx.TimeoutException) as e:
+                last_err = e
+                continue
+        if body is not None:
             break
-        except (httpx.ConnectError, httpx.TimeoutException) as e:
-            last_err = e
-            continue
 
     if body is None:
         if last_err:
@@ -76,8 +106,9 @@ async def pull_sabnzbd(client: httpx.AsyncClient, svc: dict) -> dict:
     stats = {}
     try:
         r_stats = await client.get(
-            endpoint,
+            chosen_endpoint,
             params={"mode": "server_stats", "output": "json", "apikey": key},
+            headers={"User-Agent": "ArrWeStatistics/1.0", "X-Api-Key": key},
             timeout=3.0,
         )
         if r_stats.status_code == 200:
