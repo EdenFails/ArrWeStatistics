@@ -71,6 +71,10 @@ async def add_security_headers(req: Request, call_next):
         "img-src 'self' data: https:; "
         "connect-src 'self'"
     )
+    if req.url.path.startswith("/static/") or req.url.path == "/":
+        res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        res.headers["Pragma"] = "no-cache"
+        res.headers["Expires"] = "0"
     return res
 
 

@@ -41,23 +41,67 @@ def get_disk_usage(mount_path: str) -> dict:
         }
 
 
+def _resolve_folder_path(base_path: str, f_sub: str) -> str:
+    if os.path.isabs(f_sub):
+        if os.path.exists(f_sub):
+            return f_sub
+        parent = os.path.dirname(f_sub)
+        target = os.path.basename(f_sub).lower()
+        if os.path.isdir(parent):
+            try:
+                with os.scandir(parent) as it:
+                    for entry in it:
+                        if entry.name.lower() == target:
+                            return entry.path
+            except OSError:
+                pass
+        return f_sub
+
+    candidate = os.path.join(base_path, f_sub)
+    if os.path.exists(candidate):
+        return candidate
+
+    target = f_sub.lower()
+    if os.path.isdir(base_path):
+        try:
+            with os.scandir(base_path) as it:
+                for entry in it:
+                    if entry.name.lower() == target:
+                        return entry.path
+        except OSError:
+            pass
+
+    return candidate
+
+
 def _calc_folder_size_sync(folder_path: str) -> int:
-    total = 0
     clean = os.path.abspath(folder_path)
     if not os.path.exists(clean):
         return 0
 
+    total = 0
     stack = [clean]
+    seen_dirs = {os.path.realpath(clean)}
+    seen_files = set()
+
     while stack:
         curr = stack.pop()
         try:
             with os.scandir(curr) as it:
                 for entry in it:
                     try:
-                        if entry.is_file(follow_symlinks=False):
-                            total += entry.stat(follow_symlinks=False).st_size
-                        elif entry.is_dir(follow_symlinks=False):
-                            stack.append(entry.path)
+                        is_d = entry.is_dir(follow_symlinks=True)
+                        if is_d:
+                            real_d = os.path.realpath(entry.path)
+                            if real_d not in seen_dirs:
+                                seen_dirs.add(real_d)
+                                stack.append(entry.path)
+                        elif entry.is_file(follow_symlinks=True):
+                            st = entry.stat(follow_symlinks=True)
+                            file_id = (st.st_dev, st.st_ino)
+                            if file_id not in seen_files:
+                                seen_files.add(file_id)
+                                total += st.st_size
                     except (PermissionError, OSError):
                         continue
         except (PermissionError, OSError):
@@ -85,6 +129,8 @@ def _run_mount_scan_sync(mount_id: int) -> None:
     total_disk = disk["total_bytes"]
     used_disk = disk["used_bytes"]
 
+    print(f"[Storage] Scanning mount #{mount_id} ('{mount['name']}' at '{base_path}')...")
+
     for item in raw_folders:
         if isinstance(item, str):
             f_name = item.strip()
@@ -98,12 +144,15 @@ def _run_mount_scan_sync(mount_id: int) -> None:
         if not f_name:
             continue
 
-        full_path = f_sub if os.path.isabs(f_sub) else os.path.join(base_path, f_sub)
+        full_path = _resolve_folder_path(base_path, f_sub)
         size = _calc_folder_size_sync(full_path)
         total_folders_bytes += size
 
         pool_pct = round((size / total_disk * 100), 2) if total_disk > 0 else 0.0
         used_pct = round((size / used_disk * 100), 2) if used_disk > 0 else 0.0
+
+        exists = os.path.exists(full_path)
+        print(f"[Storage] -> Folder '{f_name}': {size} bytes ({round(size / (1024**3), 2)} GB) [exists={exists}, path='{full_path}']")
 
         folder_stats.append({
             "name": f_name,
@@ -112,7 +161,7 @@ def _run_mount_scan_sync(mount_id: int) -> None:
             "size_bytes": size,
             "percent_of_pool": pool_pct,
             "percent_of_used": used_pct,
-            "exists": os.path.exists(full_path),
+            "exists": exists,
         })
 
     now = time.time()
@@ -124,6 +173,7 @@ def _run_mount_scan_sync(mount_id: int) -> None:
         cached_folders_json=json.dumps(folder_stats),
         last_scanned_ts=now,
     )
+    print(f"[Storage] Scan complete for mount #{mount_id}: {total_folders_bytes} bytes across {len(folder_stats)} folders.")
 
 
 async def trigger_mount_scan(mount_id: int) -> bool:
