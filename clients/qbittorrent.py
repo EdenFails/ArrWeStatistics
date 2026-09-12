@@ -77,7 +77,7 @@ async def pull_qbittorrent(client: httpx.AsyncClient, svc: dict) -> dict:
                 raise RuntimeError("qBittorrent login rejected: check username and password")
             if r_login.status_code == 403:
                 raise RuntimeError("qBittorrent returned 403 Forbidden (check IP ban or Host header / CSRF settings)")
-            if r_login.status_code != 200:
+            if not (200 <= r_login.status_code < 300):
                 raise RuntimeError(f"qBittorrent WebUI returned HTTP {r_login.status_code}")
 
             cookies = dict(r_login.cookies)
