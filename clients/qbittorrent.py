@@ -5,11 +5,20 @@ _cookie_cache: dict[str, dict] = {}
 
 def get_candidate_urls(base_url: str) -> list[str]:
     clean = base_url.rstrip("/")
+    if not clean.startswith(("http://", "https://")):
+        clean = f"http://{clean}"
     candidates = [clean]
+    if "qbittorrent" in clean:
+        candidates.append(clean.replace("qbittorrent", "gluetun"))
+        candidates.append(clean.replace("qbittorrent", "172.39.0.2"))
     if "localhost" in clean:
+        candidates.append(clean.replace("localhost", "gluetun"))
+        candidates.append(clean.replace("localhost", "172.39.0.2"))
         candidates.append(clean.replace("localhost", "host.docker.internal"))
         candidates.append(clean.replace("localhost", "172.17.0.1"))
     elif "127.0.0.1" in clean:
+        candidates.append(clean.replace("127.0.0.1", "gluetun"))
+        candidates.append(clean.replace("127.0.0.1", "172.39.0.2"))
         candidates.append(clean.replace("127.0.0.1", "host.docker.internal"))
         candidates.append(clean.replace("127.0.0.1", "172.17.0.1"))
     return candidates

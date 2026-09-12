@@ -1,18 +1,54 @@
 import httpx
 
 
-async def pull_sabnzbd(client: httpx.AsyncClient, svc: dict) -> dict:
-    url = svc["base_url"].rstrip("/")
-    key = svc.get("apikey") or ""
+def get_candidate_urls(base_url: str) -> list[str]:
+    clean = base_url.rstrip("/")
+    if not clean.startswith(("http://", "https://")):
+        clean = f"http://{clean}"
+    candidates = [clean]
+    if "sabnzbd" in clean:
+        candidates.append(clean.replace("sabnzbd", "gluetun"))
+        candidates.append(clean.replace("sabnzbd", "172.39.0.2"))
+    if "localhost" in clean:
+        candidates.append(clean.replace("localhost", "gluetun"))
+        candidates.append(clean.replace("localhost", "172.39.0.2"))
+        candidates.append(clean.replace("localhost", "host.docker.internal"))
+        candidates.append(clean.replace("localhost", "172.17.0.1"))
+    elif "127.0.0.1" in clean:
+        candidates.append(clean.replace("127.0.0.1", "gluetun"))
+        candidates.append(clean.replace("127.0.0.1", "172.39.0.2"))
+        candidates.append(clean.replace("127.0.0.1", "host.docker.internal"))
+        candidates.append(clean.replace("127.0.0.1", "172.17.0.1"))
+    return candidates
 
-    endpoint = f"{url}/api"
-    r = await client.get(
-        endpoint,
-        params={"mode": "queue", "output": "json", "apikey": key},
-        timeout=5.0,
-    )
-    r.raise_for_status()
-    body = r.json()
+
+async def pull_sabnzbd(client: httpx.AsyncClient, svc: dict) -> dict:
+    key = svc.get("apikey") or ""
+    candidates = get_candidate_urls(svc["base_url"])
+    last_err = None
+    body = None
+    chosen_url = candidates[0]
+
+    for url in candidates:
+        chosen_url = url
+        endpoint = f"{url}/api"
+        try:
+            r = await client.get(
+                endpoint,
+                params={"mode": "queue", "output": "json", "apikey": key},
+                timeout=5.0,
+            )
+            r.raise_for_status()
+            body = r.json()
+            break
+        except (httpx.ConnectError, httpx.TimeoutException) as e:
+            last_err = e
+            continue
+
+    if body is None:
+        if last_err:
+            raise RuntimeError(f"Could not connect to SABnzbd: {last_err}")
+        raise RuntimeError("Failed to connect to SABnzbd WebUI")
 
     if isinstance(body, dict) and body.get("status") is False:
         raise RuntimeError(f"SABnzbd: {body.get('error', 'API error')}")
