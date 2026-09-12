@@ -469,6 +469,32 @@ label {
   padding: 20px;
 }
 
+#overlay-folder-browser {
+  z-index: 110;
+}
+
+.folder-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background-color: #111a2e;
+  border: 1px solid var(--accent);
+  color: var(--text-main);
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.folder-chip-remove {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-weight: bold;
+}
+
+.folder-chip-remove:hover {
+  color: var(--status-offline);
+}
+
 .overlay-dialog {
   background-color: var(--bg-surface);
   border: 1px solid var(--border-strong);

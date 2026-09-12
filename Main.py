@@ -492,6 +492,11 @@ async def scan_storage_mount(storage_id: int, _: bool = Depends(auth.require_aut
     return {"success": True, "started": started}
 
 
+@app.get("/api/filesystem/browse")
+async def browse_filesystem_route(path: str = Query(default=""), _: bool = Depends(auth.require_auth)):
+    return storage.browse_filesystem(path)
+
+
 if os.path.isdir(UI_DIR):
     app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
 

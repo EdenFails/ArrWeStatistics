@@ -158,22 +158,108 @@ def get_all_storage_data() -> list[dict]:
         except Exception:
             pass
 
+        total_b = live_disk["total_bytes"] or m["total_bytes"] or 0
+        used_b = live_disk["used_bytes"] or m["used_bytes"] or 0
+        free_b = live_disk["free_bytes"] or m["free_bytes"] or 0
+        used_pct = round((used_b / total_b * 100), 1) if total_b > 0 else 0.0
+        is_accessible = live_disk["exists"]
+        err = live_disk["error"]
+
+        # If scan hasn't run yet, construct default items for watched folders
+        display_folders = []
+        if cached_folders:
+            display_folders = cached_folders
+        else:
+            for item in watched_folders:
+                fn = item if isinstance(item, str) else item.get("name", "")
+                fp = item if isinstance(item, str) else item.get("path", fn)
+                display_folders.append({
+                    "name": fn,
+                    "path": fp,
+                    "bytes": 0,
+                    "exists": False,
+                    "percent_of_used": 0.0,
+                })
+
         results.append({
             "id": mid,
             "name": m["name"],
             "mount_path": base_path,
             "display_order": m["display_order"],
             "is_enabled": m["is_enabled"],
-            "exists": live_disk["exists"],
-            "error": live_disk["error"],
-            "total_bytes": live_disk["total_bytes"] or m["total_bytes"],
-            "used_bytes": live_disk["used_bytes"] or m["used_bytes"],
-            "free_bytes": live_disk["free_bytes"] or m["free_bytes"],
-            "used_pct": round((live_disk["used_bytes"] / live_disk["total_bytes"] * 100), 1) if live_disk["total_bytes"] > 0 else 0.0,
+            "is_accessible": is_accessible,
+            "exists": is_accessible,
+            "error_message": err,
+            "error": err,
+            "total_bytes": total_b,
+            "used_bytes": used_b,
+            "free_bytes": free_b,
+            "used_percent": used_pct,
+            "used_pct": used_pct,
             "last_scanned_ts": m["last_scanned_ts"],
             "is_scanning": is_mount_scanning(mid),
             "watched_folders": watched_folders,
             "folder_breakdown": cached_folders,
+            "folders": display_folders,
         })
 
     return results
+
+
+def browse_filesystem(target_path: str | None = None) -> dict:
+    is_windows = os.name == "nt"
+
+    if not target_path or not str(target_path).strip():
+        target_path = "C:\\" if is_windows else "/"
+
+    clean_path = os.path.abspath(target_path)
+
+    if not os.path.exists(clean_path):
+        fallback = "C:\\" if is_windows else "/"
+        if os.path.exists(fallback):
+            clean_path = fallback
+        else:
+            clean_path = os.path.abspath(".")
+
+    parent_path = os.path.dirname(clean_path)
+    if parent_path == clean_path:
+        parent_path = None
+
+    directories = []
+    error_msg = None
+
+    try:
+        with os.scandir(clean_path) as it:
+            for entry in it:
+                try:
+                    if entry.is_dir(follow_symlinks=True):
+                        if not entry.name.startswith("."):
+                            directories.append({
+                                "name": entry.name,
+                                "path": entry.path.replace("\\", "/") if not is_windows else entry.path,
+                            })
+                except (PermissionError, OSError):
+                    continue
+    except (PermissionError, OSError) as e:
+        error_msg = f"Cannot read directory: {e}"
+
+    directories.sort(key=lambda d: d["name"].lower())
+
+    display_curr = clean_path.replace("\\", "/") if not is_windows else clean_path
+    display_parent = parent_path.replace("\\", "/") if (parent_path and not is_windows) else parent_path
+
+    drives = []
+    if is_windows:
+        import string
+        for letter in string.ascii_uppercase:
+            drive = f"{letter}:\\"
+            if os.path.exists(drive):
+                drives.append({"name": f"{letter}:", "path": drive})
+
+    return {
+        "current_path": display_curr,
+        "parent_path": display_parent,
+        "directories": directories,
+        "drives": drives,
+        "error": error_msg,
+    }

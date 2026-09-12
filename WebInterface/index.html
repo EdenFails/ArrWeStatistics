@@ -207,17 +207,24 @@
 
               <div class="form-group">
                 <label for="storage-path">MOUNT PATH (CONTAINER PATH)</label>
-                <input type="text" id="storage-path" class="input-text" placeholder="/storage or /mnt/storage" required>
+                <div style="display: flex; gap: 6px;">
+                  <input type="text" id="storage-path" class="input-text" style="flex: 1;" placeholder="/storage or /mnt/storage" required>
+                  <button type="button" id="btn-browse-mount" class="btn btn-sm">BROWSE</button>
+                </div>
                 <span style="font-size: 10px; color: var(--text-dim); margin-top: 2px;">
-                  Note: In Docker, ensure this folder is mounted into ArrWeStatistics in docker-compose.yml (e.g. - /mnt/storage:/storage:ro).
+                  In Docker, ensure this folder is mounted into ArrWeStatistics in docker-compose.yml (e.g. - /mnt/storage:/storage:ro).
                 </span>
               </div>
 
               <div class="form-group">
-                <label for="storage-folders">WATCHED SUBFOLDERS (COMMA-SEPARATED)</label>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+                  <label for="storage-folders">WATCHED SUBFOLDERS</label>
+                  <button type="button" id="btn-browse-subfolders" class="btn btn-sm" style="font-size: 9px; padding: 2px 6px;">+ BROWSE SUBFOLDERS</button>
+                </div>
                 <input type="text" id="storage-folders" class="input-text" placeholder="movies, series, anime, downloads">
+                <div id="watched-folders-chips" class="detail-filters" style="margin-top: 6px; margin-bottom: 0;"></div>
                 <span style="font-size: 10px; color: var(--text-dim); margin-top: 2px;">
-                  Relative subfolders inside the mount path or absolute paths.
+                  Click "+ BROWSE SUBFOLDERS" to view and select folders inside the mount path, or enter comma-separated names.
                 </span>
               </div>
 
@@ -230,6 +237,39 @@
               <div id="storage-feedback" class="form-feedback hidden"></div>
               <button type="submit" id="btn-save-storage" class="btn btn-primary" style="margin-top: 8px;">SAVE STORAGE POOL</button>
             </form>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Filesystem / Folder Browser Modal -->
+    <div id="overlay-folder-browser" class="overlay hidden">
+      <div class="overlay-dialog" style="max-width: 640px; width: 95vw;">
+        <div class="dialog-header">
+          <div class="dialog-title" id="browser-title">FILE &amp; FOLDER BROWSER</div>
+          <button id="btn-close-browser" class="btn-close" aria-label="Close">X</button>
+        </div>
+        <div class="dialog-body" style="display: flex; flex-direction: column; gap: 10px;">
+          <div style="display: flex; gap: 6px; align-items: center;">
+            <button id="btn-browser-up" class="btn btn-sm" title="Go up to parent directory">UP</button>
+            <input type="text" id="browser-current-path" class="input-text" style="flex: 1; font-family: var(--font-mono); font-size: 11px;" value="/">
+            <button id="btn-browser-go" class="btn btn-sm">GO</button>
+          </div>
+          <div id="browser-drives" style="display: flex; gap: 6px; flex-wrap: wrap;"></div>
+          
+          <div style="font-size: 10px; color: var(--text-dim); font-family: var(--font-mono);">
+            Select a directory to navigate into it, or click "+ WATCH" to add it to your watched list.
+          </div>
+
+          <div id="browser-list-container" style="border: 1px solid var(--border-dim); background-color: var(--bg-surface); max-height: 320px; min-height: 180px; overflow-y: auto;">
+            <div id="browser-list" class="services-table" style="max-height: none; gap: 2px;"></div>
+          </div>
+
+          <div id="browser-feedback" class="form-feedback hidden"></div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px; border-top: 1px solid var(--border-dim); padding-top: 10px;">
+            <button type="button" id="btn-browser-select-mount" class="btn btn-primary btn-sm">SELECT AS MOUNT PATH</button>
+            <button type="button" id="btn-browser-done" class="btn btn-sm">DONE</button>
           </div>
         </div>
       </div>

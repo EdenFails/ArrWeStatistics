@@ -177,7 +177,15 @@ def run_tests():
         assert len(pools) >= 1
         assert pools[0]["name"] == "Media Pool"
         assert pools[0]["total_bytes"] > 0
+        assert pools[0]["is_accessible"] is True
         print("[+] Test 4.10.1 Passed: Storage pool creation and disk_usage telemetry verified.")
+
+        browse_res = client.get(f"/api/filesystem/browse?path={tempfile.gettempdir()}", headers=headers)
+        assert browse_res.status_code == 200
+        bdata = browse_res.json()
+        assert "current_path" in bdata
+        assert isinstance(bdata.get("directories"), list)
+        print("[+] Test 4.10.2 Passed: /api/filesystem/browse directory inspection verified.")
 
         resp_headers = health_res.headers
         assert resp_headers.get("x-content-type-options") == "nosniff"

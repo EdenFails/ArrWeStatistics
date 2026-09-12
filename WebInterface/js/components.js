@@ -288,7 +288,7 @@ const UI = {
   },
 
   renderStorageCard(pool) {
-    const isOnline = pool.is_accessible;
+    const isOnline = Boolean(pool.is_accessible ?? pool.exists);
     const badgeClass = isOnline ? 'badge-online' : 'badge-offline';
     const statusText = isOnline ? `${fmtBytes(pool.free_bytes)} FREE` : 'UNMOUNTED';
 
@@ -298,13 +298,17 @@ const UI = {
       bodyHtml = `
         <div class="stat-box">
           <div class="stat-box-lbl">DIAGNOSTIC</div>
-          <div class="stat-box-val" style="color: var(--status-offline); font-size: 11px;">
-            ${esc(pool.error_message || 'Mount path not found or permission denied')}
+          <div class="stat-box-val" style="color: var(--status-offline); font-size: 11px; margin-bottom: 6px;">
+            ${esc(pool.error_message || pool.error || 'Mount path not found or permission denied')}
+          </div>
+          <div style="font-size: 10px; color: var(--text-dim); line-height: 1.4;">
+            Container path: <span style="font-family: var(--font-mono); color: var(--text-main);">${esc(pool.mount_path)}</span>.<br>
+            If running in Docker, ensure this path is mapped in <span style="font-family: var(--font-mono);">docker-compose.yml</span> under <span style="font-family: var(--font-mono);">volumes</span> (e.g. <span style="font-family: var(--font-mono);">- /mnt/storage:/storage:ro</span>) and run <span style="font-family: var(--font-mono);">docker compose up -d</span>.
           </div>
         </div>
       `;
     } else {
-      const pct = pool.used_percent || 0;
+      const pct = pool.used_percent ?? pool.used_pct ?? 0;
       let fillClass = 'storage';
       if (pct > 90) fillClass = 'danger';
       else if (pct > 75) fillClass = 'warn';

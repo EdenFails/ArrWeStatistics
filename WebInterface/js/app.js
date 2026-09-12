@@ -661,6 +661,159 @@ function closeSettings() {
   document.getElementById('overlay-settings').classList.add('hidden');
 }
 
+// Folder & Filesystem Browser State
+const browserState = {
+  currentPath: '/',
+  parentPath: null,
+  mode: 'mount', // 'mount' or 'subfolders'
+  watchedFolders: new Set(),
+  lastDirectories: [],
+};
+
+function syncWatchedFoldersInput() {
+  const input = document.getElementById('storage-folders');
+  const chipsContainer = document.getElementById('watched-folders-chips');
+  if (!input) return;
+
+  const arr = Array.from(browserState.watchedFolders);
+  input.value = arr.join(', ');
+
+  if (chipsContainer) {
+    if (arr.length === 0) {
+      chipsContainer.innerHTML = '';
+    } else {
+      chipsContainer.innerHTML = arr.map(f => `
+        <span class="folder-chip">
+          <span>${esc(f)}</span>
+          <span class="folder-chip-remove" onclick="removeWatchedFolder('${esc(f)}')">×</span>
+        </span>
+      `).join('');
+    }
+  }
+}
+
+window.removeWatchedFolder = function(name) {
+  browserState.watchedFolders.delete(name);
+  syncWatchedFoldersInput();
+  renderBrowserDirectoryList();
+};
+
+window.toggleWatchFolder = function(name) {
+  if (browserState.watchedFolders.has(name)) {
+    browserState.watchedFolders.delete(name);
+  } else {
+    browserState.watchedFolders.add(name);
+  }
+  syncWatchedFoldersInput();
+  renderBrowserDirectoryList();
+};
+
+async function openFolderBrowser(targetPath = '', mode = 'mount') {
+  browserState.mode = mode;
+
+  // Sync existing input into watchedFolders set
+  const input = document.getElementById('storage-folders');
+  if (input && input.value) {
+    browserState.watchedFolders.clear();
+    input.value.split(',').forEach(s => {
+      const trimmed = s.trim();
+      if (trimmed) browserState.watchedFolders.add(trimmed);
+    });
+  }
+  syncWatchedFoldersInput();
+
+  const titleEl = document.getElementById('browser-title');
+  if (titleEl) {
+    titleEl.textContent = mode === 'mount' ? 'BROWSE MOUNT PATH' : 'SELECT WATCHED SUBFOLDERS';
+  }
+
+  document.getElementById('overlay-folder-browser').classList.remove('hidden');
+  await browseToPath(targetPath);
+}
+
+function closeFolderBrowser() {
+  document.getElementById('overlay-folder-browser').classList.add('hidden');
+}
+
+window.browseToPath = async function(path) {
+  const pathInput = document.getElementById('browser-current-path');
+  const listEl = document.getElementById('browser-list');
+  const feedbackEl = document.getElementById('browser-feedback');
+  if (feedbackEl) feedbackEl.classList.add('hidden');
+
+  if (listEl) {
+    listEl.innerHTML = `<div class="empty-state" style="padding: 20px;">Loading directory...</div>`;
+  }
+
+  try {
+    const res = await api(`/api/filesystem/browse?path=${encodeURIComponent(path || '')}`);
+    browserState.currentPath = res.current_path;
+    browserState.parentPath = res.parent_path;
+
+    if (pathInput) {
+      pathInput.value = res.current_path;
+    }
+
+    const btnUp = document.getElementById('btn-browser-up');
+    if (btnUp) {
+      btnUp.disabled = !res.parent_path;
+    }
+
+    // Render Windows drives if available
+    const drivesEl = document.getElementById('browser-drives');
+    if (drivesEl) {
+      if (res.drives && res.drives.length > 0) {
+        drivesEl.innerHTML = res.drives.map(d => `
+          <button type="button" class="btn btn-sm" onclick="browseToPath('${esc(d.path)}')">${esc(d.name)}</button>
+        `).join('');
+      } else {
+        drivesEl.innerHTML = '';
+      }
+    }
+
+    browserState.lastDirectories = res.directories || [];
+    renderBrowserDirectoryList();
+
+    if (res.error && feedbackEl) {
+      feedbackEl.className = 'form-feedback error';
+      feedbackEl.textContent = res.error;
+      feedbackEl.classList.remove('hidden');
+    }
+  } catch (err) {
+    if (listEl) {
+      listEl.innerHTML = `<div class="empty-state" style="color: var(--status-offline); padding: 20px;">Error: ${esc(err.message)}</div>`;
+    }
+  }
+};
+
+function renderBrowserDirectoryList() {
+  const listEl = document.getElementById('browser-list');
+  if (!listEl) return;
+
+  const dirs = browserState.lastDirectories || [];
+  if (dirs.length === 0) {
+    listEl.innerHTML = `<div class="empty-state" style="padding: 24px;">No subdirectories found in this folder.</div>`;
+    return;
+  }
+
+  listEl.innerHTML = dirs.map(d => {
+    const isWatched = browserState.watchedFolders.has(d.name);
+    return `
+      <div class="svc-row" style="padding: 6px 10px;">
+        <div class="svc-row-info" style="cursor: pointer; flex: 1;" onclick="browseToPath('${esc(d.path)}')">
+          <span class="svc-row-name" style="font-family: var(--font-mono); font-size: 11px;">📁 ${esc(d.name)}</span>
+        </div>
+        <div class="svc-row-actions">
+          <button type="button" class="btn btn-sm" onclick="browseToPath('${esc(d.path)}')">OPEN</button>
+          <button type="button" class="btn btn-sm ${isWatched ? 'btn-primary' : 'btn-subtle'}" onclick="toggleWatchFolder('${esc(d.name)}')">
+            ${isWatched ? 'WATCHED ✓' : '+ WATCH'}
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   checkInitStatus();
 
@@ -676,10 +829,75 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-close-settings').addEventListener('click', closeSettings);
   document.getElementById('btn-logout').addEventListener('click', handleLogout);
 
-  // Storage Pool Navigation
+  // Storage Pool Navigation & Browsing
   const btnOpenStorage = document.getElementById('btn-open-storage-modal');
   if (btnOpenStorage) {
     btnOpenStorage.addEventListener('click', () => openSettings('storage'));
+  }
+
+  const btnBrowseMount = document.getElementById('btn-browse-mount');
+  if (btnBrowseMount) {
+    btnBrowseMount.addEventListener('click', () => {
+      const currentVal = document.getElementById('storage-path').value || '/';
+      openFolderBrowser(currentVal, 'mount');
+    });
+  }
+
+  const btnBrowseSub = document.getElementById('btn-browse-subfolders');
+  if (btnBrowseSub) {
+    btnBrowseSub.addEventListener('click', () => {
+      const currentVal = document.getElementById('storage-path').value || '/';
+      openFolderBrowser(currentVal, 'subfolders');
+    });
+  }
+
+  const btnCloseBrowser = document.getElementById('btn-close-browser');
+  if (btnCloseBrowser) btnCloseBrowser.addEventListener('click', closeFolderBrowser);
+  const btnDoneBrowser = document.getElementById('btn-browser-done');
+  if (btnDoneBrowser) btnDoneBrowser.addEventListener('click', closeFolderBrowser);
+
+  const btnBrowserUp = document.getElementById('btn-browser-up');
+  if (btnBrowserUp) {
+    btnBrowserUp.addEventListener('click', () => {
+      if (browserState.parentPath) {
+        browseToPath(browserState.parentPath);
+      }
+    });
+  }
+
+  const btnBrowserGo = document.getElementById('btn-browser-go');
+  const pathInput = document.getElementById('browser-current-path');
+  if (btnBrowserGo && pathInput) {
+    btnBrowserGo.addEventListener('click', () => browseToPath(pathInput.value));
+    pathInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        browseToPath(pathInput.value);
+      }
+    });
+  }
+
+  const btnSelectMount = document.getElementById('btn-browser-select-mount');
+  if (btnSelectMount) {
+    btnSelectMount.addEventListener('click', () => {
+      const targetInput = document.getElementById('storage-path');
+      if (targetInput) {
+        targetInput.value = browserState.currentPath;
+      }
+      closeFolderBrowser();
+    });
+  }
+
+  const foldersInput = document.getElementById('storage-folders');
+  if (foldersInput) {
+    foldersInput.addEventListener('input', () => {
+      browserState.watchedFolders.clear();
+      foldersInput.value.split(',').forEach(s => {
+        const trimmed = s.trim();
+        if (trimmed) browserState.watchedFolders.add(trimmed);
+      });
+      syncWatchedFoldersInput();
+    });
   }
 
   // Tabs
@@ -704,7 +922,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   document.getElementById('form-add-service').addEventListener('submit', handleAddService);
-  document.getElementById('form-add-storage').addEventListener('submit', handleAddStorage);
+  document.getElementById('form-add-storage').addEventListener('submit', (e) => {
+    handleAddStorage(e).then(() => {
+      browserState.watchedFolders.clear();
+      syncWatchedFoldersInput();
+    });
+  });
 
   // Detail Modal Close
   const btnCloseDetail = document.getElementById('btn-close-detail');
@@ -712,9 +935,25 @@ document.addEventListener('DOMContentLoaded', () => {
     btnCloseDetail.addEventListener('click', closeServiceDetail);
   }
 
+  // Close modals when clicking outside the dialog content (on the overlay background)
+  document.querySelectorAll('.overlay').forEach(overlay => {
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        if (overlay.id === 'overlay-service-detail') {
+          closeServiceDetail();
+        } else if (overlay.id === 'overlay-settings') {
+          closeSettings();
+        } else if (overlay.id === 'overlay-folder-browser') {
+          closeFolderBrowser();
+        }
+      }
+    });
+  });
+
   // Escape key closes modals
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      closeFolderBrowser();
       closeSettings();
       closeServiceDetail();
     }
