@@ -55,10 +55,11 @@ async def pull_jellyfin(client: httpx.AsyncClient, svc: dict) -> dict:
 
     hdrs = {
         "User-Agent": "ArrWeStatistics/1.0",
-        "X-Emby-Token": token,
         "Authorization": f'MediaBrowser Client="ArrWeStatistics", Device="Dashboard", DeviceId="ArrWeStats", Version="1.0.0", Token="{token}"',
+        "X-Emby-Token": token,
+        "X-MediaBrowser-Token": token,
     }
-    params = {"api_key": token}
+    params = {"api_key": token, "ApiKey": token}
 
     sys_info = {}
     try:
