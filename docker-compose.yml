@@ -17,6 +17,8 @@ services:
       - CACHE_TTL_SECONDS=10
     volumes:
       - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     deploy:
       resources:
         limits:

@@ -253,38 +253,140 @@ window.deleteServiceTarget = async function(id) {
   }
 };
 
-async function handleAddService(e) {
-  e.preventDefault();
-  const errBox = document.getElementById('service-error');
-  errBox.classList.add('hidden');
+function showServiceFeedback(text, type = 'error') {
+  const box = document.getElementById('service-feedback');
+  if (!box) return;
+  box.className = `form-feedback ${type}`;
+  box.textContent = text;
+  box.classList.remove('hidden');
+}
 
-  const payload = {
-    name: document.getElementById('svc-name').value,
-    service_type: document.getElementById('svc-type').value,
-    base_url: document.getElementById('svc-url').value,
-    apikey: document.getElementById('svc-apikey').value || null,
-    username: document.getElementById('svc-user').value || null,
-    password: document.getElementById('svc-password').value || null,
-    display_order: parseInt(document.getElementById('svc-order').value || '0', 10),
-    is_enabled: document.getElementById('svc-enabled').checked ? 1 : 0,
+function hideServiceFeedback() {
+  const box = document.getElementById('service-feedback');
+  if (!box) return;
+  box.className = 'form-feedback hidden';
+  box.textContent = '';
+}
+
+function getServiceFormPayload() {
+  const name = (document.getElementById('svc-name').value || '').trim();
+  const service_type = (document.getElementById('svc-type').value || '').trim();
+  let base_url = (document.getElementById('svc-url').value || '').trim();
+  const apikey = (document.getElementById('svc-apikey').value || '').trim() || null;
+  const username = (document.getElementById('svc-user').value || '').trim() || null;
+  const password = document.getElementById('svc-password').value || null;
+  const display_order = parseInt(document.getElementById('svc-order').value || '0', 10);
+  const is_enabled = document.getElementById('svc-enabled').checked ? 1 : 0;
+
+  if (base_url && !base_url.startsWith('http://') && !base_url.startsWith('https://')) {
+    base_url = 'http://' + base_url;
+  }
+
+  return {
+    name,
+    service_type,
+    base_url,
+    apikey,
+    username,
+    password,
+    display_order: isNaN(display_order) ? 0 : display_order,
+    is_enabled,
   };
+}
+
+async function handleTestServiceClick() {
+  hideServiceFeedback();
+  const payload = getServiceFormPayload();
+  if (!payload.name || !payload.base_url) {
+    showServiceFeedback('Please provide a display name and base URL to test.', 'error');
+    return;
+  }
+
+  const btnTest = document.getElementById('btn-test-service');
+  const btnSave = document.getElementById('btn-save-service');
+  if (btnTest) btnTest.disabled = true;
+  if (btnSave) btnSave.disabled = true;
+  showServiceFeedback('Testing connection to target...', 'info');
 
   try {
+    const res = await api('/api/services/test-config', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+
+    if (res.status === 'online') {
+      showServiceFeedback(`Connection verified! Response time: ${res.response_time_ms}ms. Configuration is valid.`, 'success');
+    } else {
+      let msg = res.error_message || 'Service target is offline or unreachable.';
+      if (payload.base_url.includes('localhost') || payload.base_url.includes('127.0.0.1')) {
+        msg += ' (Docker note: "localhost" refers to the container itself. Use http://host.docker.internal:PORT or your host LAN IP e.g. http://192.168.x.x:PORT).';
+      }
+      showServiceFeedback(`Test failed: ${msg}`, 'error');
+    }
+  } catch (err) {
+    showServiceFeedback(`Test request failed: ${err.message}`, 'error');
+  } finally {
+    if (btnTest) btnTest.disabled = false;
+    if (btnSave) btnSave.disabled = false;
+  }
+}
+
+async function handleAddService(e) {
+  e.preventDefault();
+  hideServiceFeedback();
+
+  const payload = getServiceFormPayload();
+  if (!payload.name || !payload.base_url) {
+    showServiceFeedback('Display name and base URL are required.', 'error');
+    return;
+  }
+
+  const btnTest = document.getElementById('btn-test-service');
+  const btnSave = document.getElementById('btn-save-service');
+  if (btnTest) btnTest.disabled = true;
+  btnSave.disabled = true;
+  const originalSaveText = btnSave.textContent;
+  btnSave.textContent = 'TESTING...';
+  showServiceFeedback('Testing target before saving...', 'info');
+
+  try {
+    const testRes = await api('/api/services/test-config', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+
+    if (testRes.status !== 'online') {
+      let msg = testRes.error_message || 'Service target failed connectivity check.';
+      if (payload.base_url.includes('localhost') || payload.base_url.includes('127.0.0.1')) {
+        msg += ' (Docker note: "localhost" refers to the container itself. Use http://host.docker.internal:PORT or your host LAN IP e.g. http://192.168.x.x:PORT).';
+      }
+      showServiceFeedback(`Cannot save: ${msg}. Please edit connection settings and try again.`, 'error');
+      // Do not reset form - user can edit and retry immediately!
+      return;
+    }
+
+    btnSave.textContent = 'SAVING...';
     await api('/api/services', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+
+    showServiceFeedback(`Service "${payload.name}" verified and added successfully!`, 'success');
     document.getElementById('form-add-service').reset();
     document.getElementById('svc-enabled').checked = true;
     await loadServices();
     pollTelemetry(true);
   } catch (err) {
-    errBox.textContent = err.message;
-    errBox.classList.remove('hidden');
+    showServiceFeedback(`Error: ${err.message}`, 'error');
+  } finally {
+    if (btnTest) btnTest.disabled = false;
+    btnSave.disabled = false;
+    btnSave.textContent = originalSaveText;
   }
 }
 
 function openSettings() {
+  hideServiceFeedback();
   loadServices();
   document.getElementById('overlay-settings').classList.remove('hidden');
 }
@@ -306,6 +408,11 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-open-settings').addEventListener('click', openSettings);
   document.getElementById('btn-close-settings').addEventListener('click', closeSettings);
   document.getElementById('btn-logout').addEventListener('click', handleLogout);
+
+  const btnTest = document.getElementById('btn-test-service');
+  if (btnTest) {
+    btnTest.addEventListener('click', handleTestServiceClick);
+  }
 
   document.getElementById('form-add-service').addEventListener('submit', handleAddService);
 });

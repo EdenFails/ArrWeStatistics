@@ -115,17 +115,17 @@
 
             <div class="form-group">
               <label for="svc-url">BASE URL</label>
-              <input type="url" id="svc-url" class="input-text" placeholder="http://192.168.1.100:8080" required>
+              <input type="text" id="svc-url" class="input-text" placeholder="http://host.docker.internal:8085 or LAN IP" required>
             </div>
 
             <div class="form-grid">
               <div class="form-group">
                 <label for="svc-apikey">API KEY</label>
-                <input type="password" id="svc-apikey" class="input-text" placeholder="Used by SABnzbd / Jellyfin / Jellyseerr">
+                <input type="password" id="svc-apikey" class="input-text" placeholder="SABnzbd / Jellyfin / Jellyseerr (leave blank for qBittorrent)">
               </div>
               <div class="form-group">
                 <label for="svc-user">USERNAME</label>
-                <input type="text" id="svc-user" class="input-text" placeholder="qBittorrent user">
+                <input type="text" id="svc-user" class="input-text" placeholder="qBittorrent username">
               </div>
             </div>
 
@@ -146,8 +146,11 @@
               </label>
             </div>
 
-            <div id="service-error" class="form-error hidden"></div>
-            <button type="submit" class="btn btn-primary">SAVE SERVICE</button>
+            <div id="service-feedback" class="form-feedback hidden"></div>
+            <div style="display: flex; gap: 8px; margin-top: 14px;">
+              <button type="button" id="btn-test-service" class="btn">TEST CONNECTION</button>
+              <button type="submit" id="btn-save-service" class="btn btn-primary" style="flex: 1;">TEST & SAVE</button>
+            </div>
           </form>
         </div>
       </div>

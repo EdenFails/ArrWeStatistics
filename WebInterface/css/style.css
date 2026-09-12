@@ -426,13 +426,36 @@ label {
   color: var(--text-muted);
 }
 
-.form-error {
+.form-error,
+.form-feedback.error {
   padding: 8px 10px;
   background-color: #1e0505;
   border: 1px solid var(--status-offline);
   color: #fca5a5;
   font-size: 11px;
   margin-bottom: 12px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.form-feedback.success {
+  padding: 8px 10px;
+  background-color: #062419;
+  border: 1px solid var(--status-online);
+  color: #6ee7b7;
+  font-size: 11px;
+  margin-bottom: 12px;
+  line-height: 1.4;
+}
+
+.form-feedback.info {
+  padding: 8px 10px;
+  background-color: #0f1c2e;
+  border: 1px solid var(--accent);
+  color: #93c5fd;
+  font-size: 11px;
+  margin-bottom: 12px;
+  line-height: 1.4;
 }
 
 .overlay {

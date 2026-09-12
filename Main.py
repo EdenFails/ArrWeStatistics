@@ -314,6 +314,14 @@ async def test_service(service_id: int, _: bool = Depends(auth.require_auth)):
     return await fetch_service_data(http_pool, svc)
 
 
+@app.post("/api/services/test-config")
+async def test_service_config(body: ServiceInput, _: bool = Depends(auth.require_auth)):
+    global http_pool
+    if not http_pool:
+        raise HTTPException(status_code=500, detail="HTTP client unavailable")
+    return await fetch_service_data(http_pool, body.model_dump())
+
+
 @app.get("/api/telemetry")
 @app.get("/api/poll")
 async def poll_telemetry(

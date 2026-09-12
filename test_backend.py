@@ -119,6 +119,22 @@ def run_tests():
         assert add_res.json()["password"] == "••••••••", "Plaintext password exposed in response!"
         print("[+] Test 4.7 Passed: Service created and secrets properly masked.")
 
+        test_cfg_res = client.post(
+            "/api/services/test-config",
+            json={
+                "name": "Test Unsaved qBittorrent",
+                "service_type": "qbittorrent",
+                "base_url": "http://127.0.0.1:59999",
+                "username": "Eden",
+                "password": "Iul@2htwif",
+            },
+            headers=headers,
+        )
+        assert test_cfg_res.status_code == 200, f"test-config endpoint failed: {test_cfg_res.text}"
+        cfg_data = test_cfg_res.json()
+        assert cfg_data["status"] in ("offline", "error"), f"Unexpected status: {cfg_data['status']}"
+        print("[+] Test 4.7.1 Passed: /api/services/test-config unsaved target connectivity testing verified.")
+
         telemetry_res = client.get("/api/telemetry", headers=headers)
         assert telemetry_res.status_code == 200, f"Telemetry failed: {telemetry_res.text}"
         data = telemetry_res.json()
