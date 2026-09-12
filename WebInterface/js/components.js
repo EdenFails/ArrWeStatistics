@@ -319,17 +319,20 @@ const UI = {
           <div class="card-list-title" style="margin-top: 14px; margin-bottom: 6px;">WATCHED SUBFOLDERS</div>
           <div class="storage-folders-list">
             ${pool.folders.map(f => {
-              const fPct = pool.total_bytes > 0 ? ((f.bytes / pool.total_bytes) * 100).toFixed(1) : 0;
-              const fSize = f.exists ? fmtBytes(f.bytes) : 'NOT FOUND';
+              const bytes = Number(f.bytes ?? f.size_bytes ?? 0);
+              const exists = f.exists !== false;
+              const fPctNum = (pool.total_bytes > 0 && !isNaN(bytes)) ? ((bytes / pool.total_bytes) * 100) : 0;
+              const fPct = fPctNum.toFixed(1);
+              const fSize = exists ? fmtBytes(bytes) : 'NOT FOUND';
               return `
                 <div class="folder-row">
                   <div class="folder-row-head">
                     <span class="folder-name">${esc(f.name)}</span>
-                    <span class="folder-meta">${fSize} ${f.exists ? `(${fPct}%)` : ''}</span>
+                    <span class="folder-meta">${fSize} ${exists ? `(${fPct}%)` : ''}</span>
                   </div>
-                  ${f.exists ? `
+                  ${exists ? `
                     <div class="progress-track">
-                      <div class="progress-fill" style="width: ${Math.min(fPct, 100)}%;"></div>
+                      <div class="progress-fill" style="width: ${Math.min(fPctNum, 100)}%;"></div>
                     </div>
                   ` : ''}
                 </div>

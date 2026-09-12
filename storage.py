@@ -43,21 +43,25 @@ def get_disk_usage(mount_path: str) -> dict:
 
 def _calc_folder_size_sync(folder_path: str) -> int:
     total = 0
-    if not os.path.exists(folder_path):
+    clean = os.path.abspath(folder_path)
+    if not os.path.exists(clean):
         return 0
 
-    try:
-        with os.scandir(folder_path) as it:
-            for entry in it:
-                try:
-                    if entry.is_file(follow_symlinks=False):
-                        total += entry.stat(follow_symlinks=False).st_size
-                    elif entry.is_dir(follow_symlinks=False):
-                        total += _calc_folder_size_sync(entry.path)
-                except (PermissionError, OSError):
-                    continue
-    except (PermissionError, OSError):
-        pass
+    stack = [clean]
+    while stack:
+        curr = stack.pop()
+        try:
+            with os.scandir(curr) as it:
+                for entry in it:
+                    try:
+                        if entry.is_file(follow_symlinks=False):
+                            total += entry.stat(follow_symlinks=False).st_size
+                        elif entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                    except (PermissionError, OSError):
+                        continue
+        except (PermissionError, OSError):
+            continue
 
     return total
 
@@ -78,6 +82,8 @@ def _run_mount_scan_sync(mount_id: int) -> None:
 
     folder_stats = []
     total_folders_bytes = 0
+    total_disk = disk["total_bytes"]
+    used_disk = disk["used_bytes"]
 
     for item in raw_folders:
         if isinstance(item, str):
@@ -96,10 +102,16 @@ def _run_mount_scan_sync(mount_id: int) -> None:
         size = _calc_folder_size_sync(full_path)
         total_folders_bytes += size
 
+        pool_pct = round((size / total_disk * 100), 2) if total_disk > 0 else 0.0
+        used_pct = round((size / used_disk * 100), 2) if used_disk > 0 else 0.0
+
         folder_stats.append({
             "name": f_name,
             "path": full_path,
+            "bytes": size,
             "size_bytes": size,
+            "percent_of_pool": pool_pct,
+            "percent_of_used": used_pct,
             "exists": os.path.exists(full_path),
         })
 
@@ -165,19 +177,31 @@ def get_all_storage_data() -> list[dict]:
         is_accessible = live_disk["exists"]
         err = live_disk["error"]
 
-        # If scan hasn't run yet, construct default items for watched folders
+        # Normalize folder items so both 'bytes' and 'size_bytes' are guaranteed present
         display_folders = []
         if cached_folders:
-            display_folders = cached_folders
+            for item in cached_folders:
+                raw_b = item.get("bytes")
+                if raw_b is None:
+                    raw_b = item.get("size_bytes", 0)
+                b = int(raw_b or 0)
+                item["bytes"] = b
+                item["size_bytes"] = b
+                if total_b > 0 and "percent_of_pool" not in item:
+                    item["percent_of_pool"] = round((b / total_b * 100), 2)
+                display_folders.append(item)
         else:
             for item in watched_folders:
                 fn = item if isinstance(item, str) else item.get("name", "")
                 fp = item if isinstance(item, str) else item.get("path", fn)
+                full_fp = fp if os.path.isabs(fp) else os.path.join(base_path, fp)
                 display_folders.append({
                     "name": fn,
-                    "path": fp,
+                    "path": full_fp,
                     "bytes": 0,
-                    "exists": False,
+                    "size_bytes": 0,
+                    "exists": os.path.exists(full_fp),
+                    "percent_of_pool": 0.0,
                     "percent_of_used": 0.0,
                 })
 
@@ -199,7 +223,7 @@ def get_all_storage_data() -> list[dict]:
             "last_scanned_ts": m["last_scanned_ts"],
             "is_scanning": is_mount_scanning(mid),
             "watched_folders": watched_folders,
-            "folder_breakdown": cached_folders,
+            "folder_breakdown": display_folders,
             "folders": display_folders,
         })
 
