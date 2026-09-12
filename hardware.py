@@ -27,6 +27,7 @@ _win_gpu_perf_cache: dict[str, Any] = {
     "util": {},
     "vram": {},
 }
+_gpu_energy_cache: dict[str, Any] = {}
 
 
 def _get_cpu_brand() -> str:
@@ -487,15 +488,20 @@ def _query_linux_drm_gpus() -> list[dict[str, Any]]:
 
             # GPU Frequency
             freq_mhz = None
-            for f_cand in (
+            direct_freq_cands = (
+                os.path.join(card_path, "device/tile0/gt0/freq0/act_freq"),
+                os.path.join(card_path, "device/tile0/gt0/freq0/cur_freq"),
                 os.path.join(card_path, "device/tile0/gt0/act_freq_mhz"),
                 os.path.join(card_path, "device/tile0/gt0/freq_act"),
                 os.path.join(card_path, "device/tile0/gt0/freq_cur"),
+                os.path.join(card_path, "device/tile0/gt1/freq0/act_freq"),
+                os.path.join(card_path, "device/tile0/gt1/freq0/cur_freq"),
                 os.path.join(card_path, "gt/gt0/act_freq_mhz"),
                 os.path.join(card_path, "gt/gt0/rps_act_freq_mhz"),
                 os.path.join(card_path, "gt_act_freq_mhz"),
                 os.path.join(dev_path, "pp_dpm_sclk"),
-            ):
+            )
+            for f_cand in direct_freq_cands:
                 if os.path.exists(f_cand):
                     try:
                         with open(f_cand, "r") as f:
@@ -520,9 +526,42 @@ def _query_linux_drm_gpus() -> list[dict[str, Any]]:
                     except Exception:
                         pass
 
+            # Deep search across all tile/gt/freq sysfs directories if still missing
+            if freq_mhz is None:
+                for search_base in (os.path.join(card_path, "device"), card_path):
+                    if freq_mhz is not None or not os.path.exists(search_base):
+                        break
+                    try:
+                        for root, dirs, files in os.walk(search_base):
+                            if os.path.relpath(root, search_base).count(os.sep) > 3:
+                                continue
+                            for target_name in ("act_freq", "cur_freq", "actual_freq", "act_freq_mhz"):
+                                if target_name in files:
+                                    try:
+                                        with open(os.path.join(root, target_name), "r") as f:
+                                            raw_val = float(f.read().strip())
+                                        if raw_val > 1000000:
+                                            freq_mhz = round(raw_val / 1000000.0, 1)
+                                        elif raw_val > 10000:
+                                            freq_mhz = round(raw_val / 1000.0, 1)
+                                        elif raw_val > 0:
+                                            freq_mhz = round(raw_val, 1)
+                                        if freq_mhz and freq_mhz > 0:
+                                            break
+                                    except Exception:
+                                        pass
+                            if freq_mhz is not None:
+                                break
+                    except Exception:
+                        pass
+
             # VRAM Detection
             vram_total = 0
             vram_used = 0
+
+            # Priority 1: Known model physical specification (e.g. Arc B580 is 12GB physical GDDR6)
+            if default_vram > 0:
+                vram_total = default_vram
 
             vram_tot_cands = (
                 os.path.join(card_path, "device/tile0/vram_total_bytes"),
@@ -535,8 +574,9 @@ def _query_linux_drm_gpus() -> list[dict[str, Any]]:
                 if os.path.exists(f_c):
                     try:
                         with open(f_c, "r") as f:
-                            vram_total = int(f.read().strip())
-                        if vram_total > 0:
+                            raw_tot = int(f.read().strip())
+                        if raw_tot > 0:
+                            vram_total = raw_tot
                             break
                     except Exception:
                         pass
@@ -575,10 +615,6 @@ def _query_linux_drm_gpus() -> list[dict[str, Any]]:
                                             vram_total = max(vram_total, bar_size)
                     except Exception:
                         pass
-
-            # Model database fallback
-            if vram_total == 0 and default_vram > 0:
-                vram_total = default_vram
 
             vram_pct = round((vram_used / vram_total * 100.0), 1) if (vram_total > 0 and vram_used > 0) else 0.0
 
@@ -655,6 +691,56 @@ def _query_linux_drm_gpus() -> list[dict[str, Any]]:
                                     break
                             except Exception:
                                 pass
+
+                # If instantaneous power is not directly exposed (standard on Xe/Battlemage), compute from energy1_input
+                if power_w is None:
+                    e_file = os.path.join(h_path, "energy1_input")
+                    if os.path.exists(e_file):
+                        try:
+                            with open(e_file, "r") as f:
+                                raw_e = int(f.read().strip())
+                            now = time.time()
+                            prev = _gpu_energy_cache.get(h_path)
+                            if prev and (now - prev["ts"]) >= 0.5:
+                                dt = now - prev["ts"]
+                                d_energy = raw_e - prev["energy_uj"]
+                                if d_energy >= 0:
+                                    calc_w = round(d_energy / (dt * 1000000.0), 1)
+                                    if 0 <= calc_w <= 600:
+                                        power_w = calc_w
+                            _gpu_energy_cache[h_path] = {"ts": now, "energy_uj": raw_e}
+                        except Exception:
+                            pass
+
+            # Fallback to powercap zones if power still unknown
+            if power_w is None and os.path.exists("/sys/class/powercap"):
+                try:
+                    for pz in os.listdir("/sys/class/powercap"):
+                        pz_path = os.path.join("/sys/class/powercap", pz)
+                        name_f = os.path.join(pz_path, "name")
+                        if os.path.exists(name_f):
+                            with open(name_f, "r") as f:
+                                zname = f.read().strip().lower()
+                            if any(k in zname for k in ("gpu", "intel-rapl", "psys")):
+                                e_uj_f = os.path.join(pz_path, "energy_uj")
+                                if os.path.exists(e_uj_f):
+                                    with open(e_uj_f, "r") as f:
+                                        raw_e = int(f.read().strip())
+                                    now = time.time()
+                                    prev = _gpu_energy_cache.get(pz_path)
+                                    if prev and (now - prev["ts"]) >= 0.5:
+                                        dt = now - prev["ts"]
+                                        d_energy = raw_e - prev["energy_uj"]
+                                        if d_energy >= 0:
+                                            calc_w = round(d_energy / (dt * 1000000.0), 1)
+                                            if 0 <= calc_w <= 600:
+                                                power_w = calc_w
+                                    _gpu_energy_cache[pz_path] = {"ts": now, "energy_uj": raw_e}
+                                    if power_w is not None:
+                                        break
+                except Exception:
+                    pass
+
 
             gpus.append({
                 "id": f"drm-{c}",

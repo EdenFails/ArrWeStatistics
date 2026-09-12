@@ -118,9 +118,19 @@ class ServiceInput(BaseModel):
         s = val.strip()
         stype = (info.data.get("service_type") or "").strip().lower() if info.data else ""
         if stype in ("handbrake", "autovideoconverter"):
-            if s.startswith("http://") or s.startswith("https://") or s.startswith("file://") or s.startswith("/") or s.startswith("\\") or (len(s) > 2 and s[1] == ":" and (s[2] == "\\" or s[2] == "/")):
+            if (
+                s.startswith("docker:")
+                or s.startswith("docker://")
+                or re.match(r"^[a-zA-Z0-9_\.\-]+$", s)
+                or s.startswith("http://")
+                or s.startswith("https://")
+                or s.startswith("file://")
+                or s.startswith("/")
+                or s.startswith("\\")
+                or (len(s) > 2 and s[1] == ":" and (s[2] == "\\" or s[2] == "/"))
+            ):
                 return s.rstrip("/") if (s.startswith("http://") or s.startswith("https://")) else s
-            raise ValueError("For HandBrake, base_url must be an absolute log file path or HTTP(S) URL")
+            raise ValueError("For HandBrake, base_url must be a Docker container name (e.g. docker:handbrake), absolute log file path, or HTTP(S) URL")
 
         if not re.match(r"^https?://[a-zA-Z0-9\.\-_:]+(/[a-zA-Z0-9\.\-_]*)*$", s):
             raise ValueError("base_url must be a valid HTTP or HTTPS URL")

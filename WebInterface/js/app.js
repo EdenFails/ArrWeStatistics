@@ -373,9 +373,9 @@ function updateServiceFormFields() {
   if (stype === 'handbrake' || stype === 'autovideoconverter') {
     if (grpAuth) grpAuth.classList.add('hidden');
     if (grpApikey) grpApikey.classList.add('hidden');
-    if (lblUrl) lblUrl.textContent = 'LOG FILE PATH OR URL';
+    if (lblUrl) lblUrl.textContent = 'DOCKER CONTAINER, LOG PATH OR URL';
     if (urlInput && (!urlInput.value || urlInput.value.includes('http://gluetun') || urlInput.value.includes('host.docker.internal'))) {
-      urlInput.placeholder = '/watch/autovideoconverter.log or http://IP:PORT/log';
+      urlInput.placeholder = 'handbrake, docker:handbrake, or /watch/autovideoconverter.log';
     }
     if (nameInput && !nameInput.value) nameInput.placeholder = 'HandBrake Transcoder';
   } else {

@@ -5,3 +5,4 @@ argon2-cffi>=23.1.0
 pydantic>=2.6.0,<3.0.0
 python-multipart>=0.0.9
 psutil>=5.9.0
+docker>=7.0.0

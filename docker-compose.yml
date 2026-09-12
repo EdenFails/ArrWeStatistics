@@ -18,6 +18,9 @@ services:
     volumes:
       - ./data:/app/data
       # - /mnt/storage:/storage:ro # Optional: Mount your MergerFS pool or host drive for disk & subfolder monitoring
+      # - /var/run/docker.sock:/var/run/docker.sock:ro # Optional: Direct Docker container log monitoring (e.g. HandBrake)
+    # devices:
+    #   - /dev/dri:/dev/dri # Optional: Direct host GPU access for telemetry (Intel Arc / Battlemage, AMD)
     extra_hosts:
       - "host.docker.internal:host-gateway"
     deploy:

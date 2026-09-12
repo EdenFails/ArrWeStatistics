@@ -201,16 +201,100 @@ def parse_handbrake_log(log_content: str) -> dict[str, Any]:
     }
 
 
+def _clean_docker_multiplexed_stream(data: bytes) -> str:
+    """Demultiplexes Docker stdout/stderr 8-byte framed streams into UTF-8 text."""
+    lines = []
+    i = 0
+    n = len(data)
+    while i + 8 <= n:
+        stream_type = data[i]
+        if stream_type in (1, 2) and data[i+1:i+4] == b"\x00\x00\x00":
+            frame_len = int.from_bytes(data[i+4:i+8], byteorder="big")
+            i += 8
+            if i + frame_len <= n:
+                payload = data[i:i+frame_len].decode("utf-8", errors="replace")
+                lines.append(payload)
+                i += frame_len
+            else:
+                lines.append(data[i:].decode("utf-8", errors="replace"))
+                break
+        else:
+            return data.decode("utf-8", errors="replace")
+    return "".join(lines) if lines else data.decode("utf-8", errors="replace")
+
+
+async def _read_docker_container_logs(container_name: str, tail: int = 100) -> str:
+    """Reads logs directly from a Docker container via python docker SDK or /var/run/docker.sock."""
+    # 1. Try python docker SDK if installed
+    try:
+        import docker
+        def _get_sync():
+            cli = docker.from_env()
+            cnt = cli.containers.get(container_name)
+            raw = cnt.logs(stdout=True, stderr=True, tail=tail)
+            return raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+        return await asyncio.to_thread(_get_sync)
+    except ImportError:
+        pass
+    except Exception as e:
+        if "NotFound" in type(e).__name__ or "404" in str(e):
+            raise ValueError(f"Docker container '{container_name}' not found. Verify container name.")
+
+    # 2. Try Unix domain socket /var/run/docker.sock via httpx
+    sock_path = "/var/run/docker.sock"
+    if os.path.exists(sock_path):
+        try:
+            transport = httpx.AsyncHTTPTransport(uds=sock_path)
+            async with httpx.AsyncClient(transport=transport, timeout=6.0) as d_client:
+                url = f"http://docker/containers/{container_name}/logs?stdout=1&stderr=1&tail={tail}"
+                res = await d_client.get(url)
+                if res.status_code == 200:
+                    return _clean_docker_multiplexed_stream(res.content)
+                elif res.status_code == 404:
+                    raise ValueError(f"Docker container '{container_name}' not found. Verify container name.")
+                else:
+                    raise ValueError(f"Docker socket returned HTTP {res.status_code}: {res.text}")
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ConnectionError(f"Failed to communicate with Docker socket at {sock_path}: {e}")
+
+    raise ValueError(
+        f"Cannot read logs from Docker container '{container_name}'. "
+        f"Ensure container '{container_name}' is running, and either mount /var/run/docker.sock:/var/run/docker.sock:ro "
+        f"or install the 'docker' Python package."
+    )
+
+
 async def pull_handbrake(client: httpx.AsyncClient, svc: dict) -> dict:
     raw_target = (svc.get("base_url") or "").strip()
     if not raw_target:
-        raise ValueError("Log path or HTTP URL is required for HandBrake / AutoVideoConverter.")
+        raise ValueError("Docker container name, log path, or HTTP URL is required for HandBrake / AutoVideoConverter.")
 
-    # Support file:// scheme or local paths
     is_http = raw_target.startswith("http://") or raw_target.startswith("https://")
+    is_docker = (
+        raw_target.startswith("docker:")
+        or raw_target.startswith("docker://")
+        or (
+            not is_http
+            and not raw_target.startswith("/")
+            and not raw_target.startswith("file://")
+            and not (len(raw_target) > 2 and raw_target[1] == ":")
+            and not os.path.exists(raw_target)
+        )
+    )
+
     log_content = ""
 
-    if is_http:
+    if is_docker:
+        c_name = raw_target
+        if c_name.startswith("docker://"):
+            c_name = c_name[9:]
+        elif c_name.startswith("docker:"):
+            c_name = c_name[7:]
+        c_name = c_name.strip()
+        log_content = await _read_docker_container_logs(c_name)
+    elif is_http:
         hdrs = {"User-Agent": "ArrWeStatistics/1.0"}
         key = (svc.get("apikey") or "").strip()
         if key:
@@ -232,4 +316,6 @@ async def pull_handbrake(client: httpx.AsyncClient, svc: dict) -> dict:
     parsed = parse_handbrake_log(log_content)
     parsed["target"] = raw_target
     parsed["is_http"] = is_http
+    parsed["is_docker"] = is_docker
     return parsed
+

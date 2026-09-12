@@ -320,6 +320,28 @@ def run_tests():
         assert hb_svc_res.status_code == 201, f"Failed to register HandBrake service: {hb_svc_res.text}"
         print("[+] Test 4.7.5 Passed: HandBrake service creation with file path verified.")
 
+        # Test 4.7.6: Docker multiplexed log stream demultiplexing & docker:container service registration
+        from clients.handbrake import _clean_docker_multiplexed_stream
+        sample_log_line = b"[autovideoconverter] Watching for files in /watch\n"
+        header = b"\x01\x00\x00\x00" + len(sample_log_line).to_bytes(4, byteorder="big")
+        mock_docker_stream = header + sample_log_line
+        demuxed = _clean_docker_multiplexed_stream(mock_docker_stream)
+        assert demuxed == sample_log_line.decode("utf-8")
+
+        hb_docker_res = client.post(
+            "/api/services",
+            json={
+                "name": "Docker HandBrake",
+                "service_type": "handbrake",
+                "base_url": "docker:handbrake",
+                "display_order": 6,
+            },
+            headers=headers,
+        )
+        assert hb_docker_res.status_code == 201, f"Failed to register Docker HandBrake service: {hb_docker_res.text}"
+        assert hb_docker_res.json()["base_url"] == "docker:handbrake"
+        print("[+] Test 4.7.6 Passed: Docker multiplexed stream demultiplexing & container service registration verified.")
+
         telemetry_res = client.get("/api/telemetry", headers=headers)
         assert telemetry_res.status_code == 200, f"Telemetry failed: {telemetry_res.text}"
         data = telemetry_res.json()
