@@ -1,0 +1,711 @@
+# ArrWeStatistics — Backend Technical Specification & API Documentation
+**Version:** 1.0.0  
+**Architecture:** Asynchronous REST API / Containerised Aggregation Portal  
+**Invariant:** Strict Read-Only Telemetry  
+
+---
+
+## 1. System Architecture & Engineering Principles
+
+ArrWeStatistics is an ultra-lightweight, security-hardened aggregation portal designed to consolidate metrics, telemetry, and health status from self-hosted media and download services (qBittorrent, SABnzbd, Jellyfin, Jellyseerr) into a single unified dashboard.
+
+The backend is built with **FastAPI** and adheres to three fundamental engineering invariants:
+
+1. **Strict Read-Only Invariant:**
+   The backend explicitly lacks destructive or state-mutating client methods. No endpoints or adapters implement torrent pausing, resuming, file deletion, queue clearing, media approval, or container restart calls. It functions purely as an observational telemetry aggregation layer.
+
+2. **Zero ORM Overhead:**
+   The application communicates directly with SQLite via Python's built-in standard library `sqlite3`. Database access enforces **Write-Ahead Logging (`WAL` mode)**, **foreign key constraints**, and **100% parameterized SQL queries** (`?`), eliminating object-relational impedance mismatch, reducing memory footprint to less than 30MB at runtime, and rendering SQL injection impossible.
+
+3. **Asynchronous Concurrency & Connection Pooling:**
+   All client telemetry scraping executes concurrently via `httpx.AsyncClient` inside `asyncio.gather()`. Connections are drawn from a shared HTTP/1.1 and HTTP/2 keep-alive pool. A single slow or unresponsive service will never block the aggregation pipeline or delay the dashboard.
+
+---
+
+## 2. Resource Optimization & Lifecycle Model
+
+To ensure the backend consumes virtually zero CPU and minimal memory when not in active use:
+
+* **Demand-Driven Telemetry (Zero Idle Polling):**
+  The backend maintains no persistent background scraping timer loops. When no browser dashboard is connected, scraping operations cease completely (~0% CPU utilization).
+* **In-Memory TTL Cache:**
+  Scraped telemetry is held in a memory cache governed by `CACHE_TTL_SECONDS` (default: 10s). If multiple browser tabs or rapid polling queries arrive within the TTL window, the cached telemetry payload is returned immediately with `0ms` network latency and `0` external requests.
+* **Visibility-Aware Polling:**
+  The frontend controller monitors `document.visibilityState` and halts polling requests whenever the browser tab is hidden or minimized.
+* **Low-Memory SQLite Cache:**
+  Configured via `PRAGMA cache_size = -2000` (caps cache memory at ~2MB) and `PRAGMA temp_store = MEMORY`.
+* **Automatic Metrics Pruning:**
+  The backend automatically retains only the most recent 100 metric entries per service, preventing unbounded database growth.
+
+---
+
+## 3. Security Architecture & Threat Defense
+
+### 3.1 Password Hashing & Salt Specification
+* **Algorithm:** Argon2id via `argon2-cffi` (`time_cost=3`, `memory_cost=65536` [64MB], `parallelism=2`).
+* **Cryptographic Salt/Pepper:** All passwords are salted with the mandatory string:
+  ```
+  EdensArrWeStats
+  ```
+  Computed as:
+  ```python
+  salted_secret = f"{password}EdensArrWeStats"
+  hash = PasswordHasher().hash(salted_secret)
+  ```
+* **Singleton Admin Model:**
+  The `auth` table enforces `id INTEGER PRIMARY KEY CHECK (id = 1)`. The dashboard is designed for single-administrator access.
+* **One-Time Onboarding Guard:**
+  The `/api/auth/setup` endpoint is permanently locked once initialized (`is_initialized = 1`). Subsequent calls return `400 Bad Request`.
+
+### 3.2 Session Management & Data Protection
+* **Access Guard:** All data endpoints (`/api/services`, `/api/telemetry`, `/api/metrics`, `/api/preferences`) require authentication via `Depends(require_auth)`. Unauthenticated requests receive `401 Unauthorized` with **zero data leakage**.
+* **Session Tokens:** Generated using `secrets.token_urlsafe(32)` (256 bits of entropy).
+* **Delivery Mechanism:** Delivered and stored via **`HttpOnly` cookies** (`SameSite=Lax`, with optional `Secure` flag for HTTPS), or through `Authorization: Bearer <token>` headers.
+* **Session Invalidation:** Immediate memory invalidation upon calling `/api/auth/logout`.
+
+### 3.3 SQL Injection Defense
+Every query executed against SQLite strictly utilizes parameterized placeholders (`?`). String concatenation, formatting (`%`, `.format()`), and f-strings are strictly prohibited across all data access methods.
+
+### 3.4 Script Attacks (XSS) & Header Hardening
+All responses are injected with security headers via HTTP middleware:
+* `Content-Security-Policy`: `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'`
+* `X-Content-Type-Options`: `nosniff`
+* `X-Frame-Options`: `DENY` (prevents clickjacking)
+* `Referrer-Policy`: `strict-origin-when-cross-origin`
+* `Permissions-Policy`: disables unnecessary hardware features (camera, microphone, geolocation).
+
+### 3.5 Input Sanitization & SSRF Protection
+* All inputs are validated via Pydantic models.
+* `base_url` fields are strictly validated with regex to permit only `http://` and `https://` schemas, rejecting malicious protocols (`javascript:`, `data:`, `file:`, `gopher:`).
+* Sensitive credentials (`apikey`, `password`) are masked in client responses with `••••••••`.
+
+---
+
+## 4. Database Schema & Data Dictionary
+
+Database engine: Native **SQLite3** (WAL Mode enabled).
+
+```
++-------------------------------------------------------------+
+| auth                                                        |
++-------------------------------------------------------------+
+| [PK] id : INTEGER PRIMARY KEY CHECK (id = 1)                |
+| password_hash : TEXT NOT NULL                               |
+| is_initialized : INTEGER DEFAULT 0                          |
+| created_at : TIMESTAMP DEFAULT CURRENT_TIMESTAMP            |
++-------------------------------------------------------------+
+                               |
+                               | (Guards access to services, metrics, & preferences)
+                               v
++-------------------------------------------------------------+   +-------------------------------------------------------------+
+| services                                                    |   | ui_preferences                                              |
++-------------------------------------------------------------+   +-------------------------------------------------------------+
+| [PK] id : INTEGER PRIMARY KEY AUTOINCREMENT                 |   | [PK] preference_key : VARCHAR(64) PRIMARY KEY               |
+| name : VARCHAR(64) NOT NULL                                 |   | preference_val : TEXT NOT NULL                              |
+| service_type : VARCHAR(32) NOT NULL                         |   +-------------------------------------------------------------+
+| base_url : VARCHAR(255) NOT NULL                            |
+| apikey : VARCHAR(255) NULL                                  |
+| username : VARCHAR(128) NULL                                |
+| password : VARCHAR(255) NULL                                |
+| is_enabled : INTEGER DEFAULT 1                              |
+| display_order : INTEGER DEFAULT 0                           |
+| config_json : TEXT NULL                                     |
++-------------------------------------------------------------+
+                               |
+                               | 1
+                               | 
+                               | 0..*
+                               v
++-------------------------------------------------------------+
+| service_metrics                                             |
++-------------------------------------------------------------+
+| [PK] id : INTEGER PRIMARY KEY AUTOINCREMENT                 |
+| [FK] service_id : INTEGER NOT NULL                          |-------> REFERENCES services(id) ON DELETE CASCADE
+| last_poll_ts : TIMESTAMP DEFAULT CURRENT_TIMESTAMP          |
+| status : VARCHAR(16) NOT NULL                               |
+| response_time_ms : INTEGER NOT NULL                         |
++-------------------------------------------------------------+
+```
+
+### Table Specifications
+
+#### 1. `auth`
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `INTEGER` | `PRIMARY KEY CHECK (id = 1)` | Singleton identifier for single-admin design |
+| `password_hash` | `TEXT` | `NOT NULL` | Argon2id hash salted with `"EdensArrWeStats"` |
+| `is_initialized`| `INTEGER` | `DEFAULT 0` | `0` = Provisioning required; `1` = Configured |
+| `created_at` | `TIMESTAMP` | `DEFAULT CURRENT_TIMESTAMP` | Initial provisioning timestamp |
+
+#### 2. `services`
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `INTEGER` | `PRIMARY KEY AUTOINCREMENT` | Unique service record identifier |
+| `name` | `TEXT` | `NOT NULL` | Display title shown on dashboard cards |
+| `service_type` | `TEXT` | `NOT NULL` | `qbittorrent`, `sabnzbd`, `jellyfin`, or `jellyseer` |
+| `base_url` | `TEXT` | `NOT NULL` | Host address (e.g. `http://192.168.1.50:8080`) |
+| `apikey` | `TEXT` | `NULLABLE` | API authentication token |
+| `username` | `TEXT` | `NULLABLE` | Form login username (qBittorrent) |
+| `password` | `TEXT` | `NULLABLE` | Form login password (qBittorrent) |
+| `is_enabled` | `INTEGER` | `DEFAULT 1` | `1` = Active for scraping; `0` = Disabled |
+| `display_order` | `INTEGER` | `DEFAULT 0` | Visual card ordering priority |
+| `config_json` | `TEXT` | `NULLABLE` | Optional JSON string for extra client parameters |
+
+#### 3. `service_metrics`
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `INTEGER` | `PRIMARY KEY AUTOINCREMENT` | Metric entry identifier |
+| `service_id` | `INTEGER` | `NOT NULL, FK -> services(id)` | Foreign key with `ON DELETE CASCADE` |
+| `last_poll_ts` | `TIMESTAMP` | `DEFAULT CURRENT_TIMESTAMP` | Timestamp of scrape |
+| `status` | `TEXT` | `NOT NULL` | `online`, `offline`, or `error` |
+| `response_time_ms`| `INTEGER`| `NOT NULL` | External HTTP response latency in milliseconds |
+
+#### 4. `ui_preferences`
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `preference_key` | `VARCHAR(64)`| `PRIMARY KEY` | Key identifier (e.g., `theme`, `grid_columns`) |
+| `preference_val` | `TEXT` | `NOT NULL` | Configuration value (plain text or JSON string) |
+
+---
+
+## 5. Complete REST API Reference
+
+### 5.1 System & Health
+
+#### `GET /api/health`
+* **Access:** Public
+* **Description:** Health check endpoint for uptime monitors and container orchestrators.
+* **Response (200 OK):**
+```json
+{
+  "status": "healthy",
+  "service": "ArrWeStatistics",
+  "version": "1.0.0",
+  "read_only": true
+}
+```
+
+---
+
+### 5.2 Authentication Endpoints
+
+#### `GET /api/auth/status`
+* **Access:** Public
+* **Description:** Returns the system setup state and current session authentication status. Leaks no sensitive data.
+* **Response (200 OK):**
+```json
+{
+  "is_initialized": true,
+  "is_authenticated": false
+}
+```
+
+#### `POST /api/auth/setup`
+* **Access:** Public (Permanently disabled once initialized)
+* **Description:** Provisions the administrator account with initial master password. Hashes using Argon2id salted with `"EdensArrWeStats"`.
+* **Request Body:**
+```json
+{
+  "password": "MasterAdminPassword123!"
+}
+```
+* **Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Administrator account provisioned successfully",
+  "token": "a1b2c3d4e5f6g7h8..."
+}
+```
+* **Set-Cookie Header:** `session_token=a1b2c3d4e5f6g7h8...; HttpOnly; SameSite=Lax; Max-Age=86400`
+* **Error Response (400 Bad Request):**
+```json
+{
+  "detail": "System is already initialized. Please log in."
+}
+```
+
+#### `POST /api/auth/login`
+* **Access:** Public (Rate-limited to 5 failures per minute per IP)
+* **Description:** Validates administrator password against salted Argon2 hash and issues a session token.
+* **Request Body:**
+```json
+{
+  "password": "MasterAdminPassword123!"
+}
+```
+* **Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Authentication successful",
+  "token": "xyz123abc456..."
+}
+```
+* **Set-Cookie Header:** `session_token=xyz123abc456...; HttpOnly; SameSite=Lax; Max-Age=86400`
+* **Error Responses:**
+  * `401 Unauthorized`: `{"detail": "Invalid credentials"}`
+  * `429 Too Many Requests`: `{"detail": "Too many failed login attempts. Please wait 60 seconds."}`
+
+#### `POST /api/auth/logout`
+* **Access:** Authenticated
+* **Description:** Invalidates active session token and clears the `session_token` cookie.
+* **Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Logged out successfully"
+}
+```
+
+#### `POST /api/auth/change-password`
+* **Access:** Authenticated
+* **Description:** Updates the master administrator password after verifying the current password.
+* **Request Body:**
+```json
+{
+  "current_password": "MasterAdminPassword123!",
+  "new_password": "NewSecurePassword456!"
+}
+```
+* **Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Password updated successfully"
+}
+```
+
+---
+
+### 5.3 Services Management (Strict Read-Only Configuration)
+
+#### `GET /api/services`
+* **Access:** Authenticated
+* **Description:** Lists all configured services. Sensitive fields (`apikey`, `password`) are masked.
+* **Response (200 OK):**
+```json
+[
+  {
+    "id": 1,
+    "name": "Main qBittorrent",
+    "service_type": "qbittorrent",
+    "base_url": "http://192.168.1.100:8080",
+    "apikey": null,
+    "username": "admin",
+    "password": "••••••••",
+    "has_password": true,
+    "has_apikey": false,
+    "is_enabled": 1,
+    "display_order": 0,
+    "config_json": null
+  },
+  {
+    "id": 2,
+    "name": "Living Room Jellyfin",
+    "service_type": "jellyfin",
+    "base_url": "http://192.168.1.105:8096",
+    "apikey": "••••••••",
+    "username": null,
+    "password": null,
+    "has_password": false,
+    "has_apikey": true,
+    "is_enabled": 1,
+    "display_order": 1,
+    "config_json": null
+  }
+]
+```
+
+#### `POST /api/services`
+* **Access:** Authenticated
+* **Description:** Registers a new service for telemetry monitoring.
+* **Request Body:**
+```json
+{
+  "name": "SABnzbd Downloader",
+  "service_type": "sabnzbd",
+  "base_url": "http://192.168.1.110:8085",
+  "apikey": "abcdef1234567890",
+  "username": null,
+  "password": null,
+  "is_enabled": 1,
+  "display_order": 2,
+  "config_json": null
+}
+```
+* **Response (201 Created):**
+```json
+{
+  "id": 3,
+  "name": "SABnzbd Downloader",
+  "service_type": "sabnzbd",
+  "base_url": "http://192.168.1.110:8085",
+  "apikey": "••••••••",
+  "username": null,
+  "password": null,
+  "has_password": false,
+  "has_apikey": true,
+  "is_enabled": 1,
+  "display_order": 2,
+  "config_json": null
+}
+```
+* **Validation Rules:**
+  * `service_type`: Must be one of `["qbittorrent", "sabnzbd", "jellyfin", "jellyseer", "jellyseerr"]`.
+  * `base_url`: Must be a valid `http://` or `https://` URL.
+
+#### `GET /api/services/{service_id}`
+* **Access:** Authenticated
+* **Description:** Retrieves configuration details for a specific service (secrets masked).
+* **Response (200 OK):** Service object.
+* **Error Response (404 Not Found):** `{"detail": "Service not found"}`
+
+#### `PUT /api/services/{service_id}`
+* **Access:** Authenticated
+* **Description:** Updates service configuration. If `apikey` or `password` is submitted as `"••••••••"`, the existing stored credential is preserved.
+* **Request Body:** Same schema as `POST /api/services`.
+* **Response (200 OK):** Updated service object.
+
+#### `DELETE /api/services/{service_id}`
+* **Access:** Authenticated
+* **Description:** Deletes a service configuration and cascades deletion to all associated metric records.
+* **Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Service deleted successfully"
+}
+```
+
+#### `POST /api/services/{service_id}/test`
+* **Access:** Authenticated
+* **Description:** Executes a single non-destructive read-only scrape against the service to test connectivity and response latency.
+* **Response (200 OK):**
+```json
+{
+  "service_id": 1,
+  "name": "Main qBittorrent",
+  "service_type": "qbittorrent",
+  "status": "online",
+  "response_time_ms": 34,
+  "error_message": null,
+  "data": { ... }
+}
+```
+
+---
+
+### 5.4 Telemetry & Scraping
+
+#### `GET /api/telemetry` (Alias: `GET /api/poll`)
+* **Access:** Authenticated
+* **Query Parameters:**
+  * `force` (`bool`, optional, default `false`): If `true`, bypasses the 10-second TTL cache and scrapes all enabled clients immediately.
+* **Description:** Asynchronously scrapes read-only telemetry from all enabled services concurrently via `asyncio.gather`.
+* **Response (200 OK) - Fresh Scrape:**
+```json
+{
+  "cached": false,
+  "cache_age_seconds": 0.0,
+  "telemetry": [
+    {
+      "service_id": 1,
+      "name": "Main qBittorrent",
+      "service_type": "qbittorrent",
+      "status": "online",
+      "response_time_ms": 42,
+      "error_message": null,
+      "data": {
+        "dl_speed_bytes": 12582912,
+        "up_speed_bytes": 1048576,
+        "dl_total_bytes": 107374182400,
+        "up_total_bytes": 53687091200,
+        "free_space_bytes": 450971566080,
+        "dht_nodes": 320,
+        "connection_status": "connected",
+        "torrents": {
+          "total": 45,
+          "active": 3,
+          "downloading": 2,
+          "seeding": 40,
+          "paused": 3,
+          "completed": 40
+        },
+        "active_items": [
+          {
+            "name": "Ubuntu-24.04-desktop-amd64.iso",
+            "size": 6050000000,
+            "progress": 68.4,
+            "dlspeed": 8388608,
+            "upspeed": 102400,
+            "eta": 240,
+            "state": "downloading"
+          }
+        ]
+      }
+    },
+    {
+      "service_id": 2,
+      "name": "Living Room Jellyfin",
+      "service_type": "jellyfin",
+      "status": "online",
+      "response_time_ms": 28,
+      "error_message": null,
+      "data": {
+        "server_name": "MediaVault",
+        "version": "10.9.6",
+        "operating_system": "Linux",
+        "active_stream_count": 2,
+        "direct_play_count": 1,
+        "transcoding_count": 1,
+        "hardware_transcoding_count": 1,
+        "streams": [
+          {
+            "session_id": "9a1b2c",
+            "user_name": "Eden",
+            "client": "Jellyfin Android TV",
+            "device_name": "Living Room Shield",
+            "media_title": "Interstellar (2014)",
+            "media_type": "Movie",
+            "is_paused": false,
+            "progress_percent": 42.5,
+            "is_transcoding": true,
+            "is_direct_play": false,
+            "hardware_acceleration": "nvenc",
+            "transcode_reasons": ["AudioCodecNotSupported"],
+            "video_codec": "h264",
+            "audio_codec": "aac"
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+* **Response (200 OK) - Served from In-Memory Cache:**
+```json
+{
+  "cached": true,
+  "cache_age_seconds": 3.42,
+  "telemetry": [ ... ]
+}
+```
+
+---
+
+### 5.5 Metrics & Latency Analytics
+
+#### `GET /api/metrics/recent`
+* **Access:** Authenticated
+* **Query Parameters:** `limit` (`int`, default `10`, max `100`).
+* **Description:** Retrieves recent latency and status history grouped by `service_id`.
+* **Response (200 OK):**
+```json
+{
+  "1": [
+    {
+      "id": 105,
+      "service_id": 1,
+      "last_poll_ts": "2026-09-12 14:00:15",
+      "status": "online",
+      "response_time_ms": 42
+    },
+    {
+      "id": 98,
+      "service_id": 1,
+      "last_poll_ts": "2026-09-12 14:00:05",
+      "status": "online",
+      "response_time_ms": 45
+    }
+  ]
+}
+```
+
+#### `GET /api/metrics/{service_id}`
+* **Access:** Authenticated
+* **Query Parameters:** `limit` (`int`, default `50`, max `200`).
+* **Description:** Retrieves historical metrics for an individual service.
+* **Response (200 OK):**
+```json
+[
+  {
+    "id": 105,
+    "service_id": 1,
+    "last_poll_ts": "2026-09-12 14:00:15",
+    "status": "online",
+    "response_time_ms": 42
+  }
+]
+```
+
+---
+
+### 5.6 UI Preferences
+
+#### `GET /api/preferences`
+* **Access:** Authenticated
+* **Description:** Returns all stored dashboard preferences.
+* **Response (200 OK):**
+```json
+{
+  "theme": "dark",
+  "grid_columns": "3",
+  "auto_refresh_rate": "6"
+}
+```
+
+#### `POST /api/preferences`
+* **Access:** Authenticated
+* **Description:** Stores or updates a UI preference key-value pair.
+* **Request Body:**
+```json
+{
+  "preference_key": "theme",
+  "preference_val": "dark"
+}
+```
+* **Response (200 OK):**
+```json
+{
+  "success": true,
+  "key": "theme"
+}
+```
+
+#### `DELETE /api/preferences/{key}`
+* **Access:** Authenticated
+* **Description:** Deletes a specific preference key.
+* **Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Preference deleted"
+}
+```
+
+---
+
+## 6. Client Adapters & Invariant Specification
+
+### 6.1 qBittorrent (`clients/qbittorrent.py`)
+* **API Version:** WebUI API v2 (`/api/v2/`)
+* **Authentication:** `POST /api/v2/auth/login` (exchanges credentials for session cookie `SID`).
+* **Scraped Endpoints (Strict Read-Only):**
+  * `GET /api/v2/sync/maindata`: Obtains `server_state` (speed, bandwidth totals, free space) and torrents dictionary.
+* **Zero-Mutation Enforcement:** No calls to `/api/v2/torrents/pause`, `/api/v2/torrents/delete`, or `/api/v2/torrents/resume`.
+
+### 6.2 SABnzbd (`clients/sabnzbd.py`)
+* **API Mode:** JSON Web API (`/api?output=json`)
+* **Authentication:** API token passed via `apikey` query parameter.
+* **Scraped Endpoints (Strict Read-Only):**
+  * `GET /api?mode=queue&output=json&apikey={token}`: Current download rate, remaining queue size/time, active slot progress.
+  * `GET /api?mode=server_stats&output=json&apikey={token}`: Daily, monthly, and total Usenet bandwidth usage.
+* **Zero-Mutation Enforcement:** No calls to `mode=pause`, `mode=resume`, `mode=queue&name=delete`.
+
+### 6.3 Jellyfin (`clients/jellyfin.py`)
+* **API Style:** REST API with `X-Emby-Token` header.
+* **Scraped Endpoints (Strict Read-Only):**
+  * `GET /Sessions`: Currently active client playbacks, user accounts, stream progress, direct play vs transcode status, video/audio codecs, and hardware acceleration types (`nvenc`, `vaapi`, `qsv`, `amf`).
+  * `GET /System/Info`: Server name, version, and operating system.
+* **Zero-Mutation Enforcement:** No calls to stop playback, terminate sessions, scan libraries, or restart the server.
+
+### 6.4 Jellyseerr / Overseerr (`clients/jellyseer.py`)
+* **API Style:** REST API with `X-Api-Key` header.
+* **Scraped Endpoints (Strict Read-Only):**
+  * `GET /api/v1/request/count`: Pending, approved, processing, available, and total media request counts.
+  * `GET /api/v1/request?take=5&sort=added`: Summary of recent movie and TV requests with requestor names and timestamps.
+* **Zero-Mutation Enforcement:** No endpoints for approving, declining, deleting, or submitting requests.
+
+---
+
+## 7. Deployment & Operational Runbook
+
+### 7.1 Running Locally with Python
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. Run the application
+python Main.py
+# Server starts at http://0.0.0.0:8000
+```
+
+### 7.2 Running with Docker
+```bash
+# Build production multi-stage image
+docker build -t arrwestatistics:latest .
+
+# Run container with persistent data mapping
+docker run -d \
+  --name arrwestatistics \
+  -p 8000:8000 \
+  -v $(pwd)/data:/app/data \
+  --restart unless-stopped \
+  arrwestatistics:latest
+```
+
+### 7.3 Orchestrating with Docker Compose
+```yaml
+version: '3.8'
+
+services:
+  arrwestatistics:
+    build: .
+    container_name: arrwestatistics
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - DB_PATH=/app/data/arrwestatistics.db
+      - CACHE_TTL_SECONDS=10
+    volumes:
+      - ./data:/app/data
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 256M
+```
+```bash
+docker-compose up -d
+```
+
+### 7.4 Environment Variables Reference
+| Variable | Default Value | Description |
+| :--- | :--- | :--- |
+| `HOST` | `0.0.0.0` | Network binding interface |
+| `PORT` | `8000` | HTTP listen port |
+| `DB_PATH` | `data/arrwestatistics.db` | Path to SQLite database file |
+| `CACHE_TTL_SECONDS` | `10` | In-memory telemetry cache expiration window |
+| `LOG_LEVEL` | `info` | Uvicorn logging verbosity (`debug`, `info`, `warning`, `error`) |
+
+---
+
+## 8. Verification & Test Suite
+
+The verification suite (`test_backend.py`) provides automated validation across 12 test assertions:
+1. **Database Schema Setup:** Verifies table creation and PRAGMA configurations.
+2. **Argon2id Salt Verification:** Validates hashing with salt `"EdensArrWeStats"`.
+3. **SQL Injection Defense:** Asserts that malicious SQL payloads (`'; DROP TABLE services; --`) are stored literally without compromising schema.
+4. **Endpoint Guarding:** Asserts `401 Unauthorized` on all protected endpoints when unauthenticated.
+5. **Setup Permanence:** Asserts `400 Bad Request` if attempting to re-initialize an established admin account.
+6. **Input Validation:** Confirms rejection of dangerous URL schemes (`javascript:alert(1)`).
+7. **Secret Masking:** Asserts that API keys and passwords are redacted (`••••••••`).
+8. **Telemetry Aggregation:** Verifies asynchronous scraping via mock/live clients.
+9. **TTL Cache Invariance:** Asserts that repeated requests within the TTL return cached data with zero redundant network I/O.
+10. **UI Preference Persistence:** Validates key-value storage and retrieval.
+11. **Security Headers:** Asserts presence of `CSP`, `X-Frame-Options: DENY`, and `X-Content-Type-Options: nosniff`.
+12. **Session Invalidation:** Confirms session tokens are revoked upon logout.
+
+To execute the test suite:
+```bash
+python test_backend.py
+```
+Expected output:
+```
+[OK] ALL BACKEND VERIFICATION TESTS PASSED SUCCESSFULLY!
+```

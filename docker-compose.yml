@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  arrwestatistics:
+    image: ghcr.io/<your-github-username>/arrwestatistics:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: arrwestatistics
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - DB_PATH=/app/data/arrwestatistics.db
+      - CACHE_TTL_SECONDS=10
+    volumes:
+      - ./data:/app/data
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 256M
+        reservations:
+          cpus: '0.05'
+          memory: 64M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true

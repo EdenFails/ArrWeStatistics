@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ArrWeStatistics</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div id="app">
+    <div id="view-setup" class="view-auth hidden">
+      <div class="auth-panel">
+        <div class="auth-header">
+          <div class="auth-brand">ARRWESTATISTICS</div>
+          <div class="auth-status">SYSTEM INITIALIZATION</div>
+        </div>
+        <p class="auth-desc">Create master administrator password to initialize database.</p>
+        <form id="form-setup">
+          <div class="form-group">
+            <label for="setup-password">ADMIN PASSWORD</label>
+            <input type="password" id="setup-password" class="input-text" autocomplete="new-password" required minlength="8">
+          </div>
+          <div id="setup-error" class="form-error hidden"></div>
+          <button type="submit" class="btn btn-block btn-primary">INITIALIZE SYSTEM</button>
+        </form>
+      </div>
+    </div>
+
+    <div id="view-login" class="view-auth hidden">
+      <div class="auth-panel">
+        <div class="auth-header">
+          <div class="auth-brand">ARRWESTATISTICS</div>
+          <div class="auth-status">AUTHENTICATION REQUIRED</div>
+        </div>
+        <p class="auth-desc">Enter administrator password to access telemetry dashboard.</p>
+        <form id="form-login">
+          <div class="form-group">
+            <label for="login-password">PASSWORD</label>
+            <input type="password" id="login-password" class="input-text" autocomplete="current-password" required>
+          </div>
+          <div id="login-error" class="form-error hidden"></div>
+          <button type="submit" class="btn btn-block btn-primary">LOGIN</button>
+        </form>
+      </div>
+    </div>
+
+    <div id="view-dashboard" class="view-main hidden">
+      <header class="navbar">
+        <div class="nav-left">
+          <span class="nav-title">ARRWESTATISTICS</span>
+          <span class="tag tag-mono">READ-ONLY</span>
+          <span id="telemetry-status-tag" class="tag tag-ok">ACTIVE</span>
+        </div>
+        <div class="nav-right">
+          <button id="btn-manual-poll" class="btn btn-sm">REFRESH</button>
+          <button id="btn-open-settings" class="btn btn-sm">SERVICES</button>
+          <button id="btn-logout" class="btn btn-sm btn-subtle">LOGOUT</button>
+        </div>
+      </header>
+
+      <div class="metric-strip">
+        <div class="metric-cell">
+          <div class="metric-lbl">DOWNLOAD RATE</div>
+          <div class="metric-val" id="sum-dl-rate">0.0 B/s</div>
+        </div>
+        <div class="metric-cell">
+          <div class="metric-lbl">UPLOAD RATE</div>
+          <div class="metric-val" id="sum-up-rate">0.0 B/s</div>
+        </div>
+        <div class="metric-cell">
+          <div class="metric-lbl">ACTIVE STREAMS</div>
+          <div class="metric-val" id="sum-active-streams">0</div>
+        </div>
+        <div class="metric-cell">
+          <div class="metric-lbl">PENDING REQUESTS</div>
+          <div class="metric-val" id="sum-pending-requests">0</div>
+        </div>
+      </div>
+
+      <main class="dashboard-body">
+        <div id="cards-container" class="cards-grid">
+          <div class="empty-state">No services registered or active. Open Services menu to configure targets.</div>
+        </div>
+      </main>
+    </div>
+
+    <div id="overlay-settings" class="overlay hidden">
+      <div class="overlay-dialog">
+        <div class="dialog-header">
+          <div class="dialog-title">SERVICE CONFIGURATION</div>
+          <button id="btn-close-settings" class="btn-close" aria-label="Close">X</button>
+        </div>
+
+        <div class="dialog-body">
+          <div class="section-title">ACTIVE TARGETS</div>
+          <div id="services-list" class="services-table"></div>
+
+          <div class="section-title">REGISTER SERVICE</div>
+          <form id="form-add-service">
+            <div class="form-grid">
+              <div class="form-group">
+                <label for="svc-name">NAME</label>
+                <input type="text" id="svc-name" class="input-text" placeholder="qBittorrent" required>
+              </div>
+              <div class="form-group">
+                <label for="svc-type">TYPE</label>
+                <select id="svc-type" class="input-select" required>
+                  <option value="qbittorrent">qBittorrent</option>
+                  <option value="sabnzbd">SABnzbd</option>
+                  <option value="jellyfin">Jellyfin</option>
+                  <option value="jellyseer">Jellyseerr</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="svc-url">BASE URL</label>
+              <input type="url" id="svc-url" class="input-text" placeholder="http://192.168.1.100:8080" required>
+            </div>
+
+            <div class="form-grid">
+              <div class="form-group">
+                <label for="svc-apikey">API KEY</label>
+                <input type="password" id="svc-apikey" class="input-text" placeholder="Used by SABnzbd / Jellyfin / Jellyseerr">
+              </div>
+              <div class="form-group">
+                <label for="svc-user">USERNAME</label>
+                <input type="text" id="svc-user" class="input-text" placeholder="qBittorrent user">
+              </div>
+            </div>
+
+            <div class="form-grid">
+              <div class="form-group">
+                <label for="svc-password">PASSWORD</label>
+                <input type="password" id="svc-password" class="input-text" placeholder="qBittorrent password">
+              </div>
+              <div class="form-group">
+                <label for="svc-order">DISPLAY ORDER</label>
+                <input type="number" id="svc-order" class="input-text" value="0">
+              </div>
+            </div>
+
+            <div class="form-group form-checkbox">
+              <label>
+                <input type="checkbox" id="svc-enabled" checked> ENABLE TELEMETRY POLLING
+              </label>
+            </div>
+
+            <div id="service-error" class="form-error hidden"></div>
+            <button type="submit" class="btn btn-primary">SAVE SERVICE</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/components.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
