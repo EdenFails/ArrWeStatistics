@@ -194,6 +194,64 @@ def run_tests():
         assert g_counts.get("total") == 620
         print("[+] Test 4.7.2 Passed: Jellyfin library stats and per-library item counting verified.")
 
+        # Test Jellyseerr telemetry pulling logic with MockTransport
+        from clients.jellyseer import pull_jellyseer
+
+        def jellyseer_handler(req: httpx.Request):
+            if req.url.path == "/api/v1/request/count":
+                return httpx.Response(200, json={
+                    "total": 15, "movie": 10, "tv": 5, "pending": 2,
+                    "approved": 6, "processing": 3, "available": 4, "declined": 0
+                })
+            elif req.url.path == "/api/v1/status":
+                return httpx.Response(200, json={"version": "1.7.0"})
+            elif req.url.path == "/api/v1/issue/count":
+                return httpx.Response(200, json={"total": 1, "open": 1, "closed": 0})
+            elif req.url.path == "/api/v1/request":
+                return httpx.Response(200, json={
+                    "results": [
+                        {
+                            "id": 101,
+                            "type": "movie",
+                            "status": 2,
+                            "is4k": False,
+                            "createdAt": "2023-08-10T12:00:00.000Z",
+                            "requestedBy": {"displayName": "Eden"},
+                            "media": {"tmdbId": 550, "status": 5}
+                        },
+                        {
+                            "id": 102,
+                            "type": "tv",
+                            "status": 1,
+                            "is4k": True,
+                            "createdAt": "2023-08-11T14:00:00.000Z",
+                            "requestedBy": {"displayName": "TestUser"},
+                            "seasons": [{"seasonNumber": 1}, {"seasonNumber": 2}],
+                            "media": {"tmdbId": 1399, "status": 2}
+                        }
+                    ]
+                })
+            elif req.url.path == "/api/v1/movie/550":
+                return httpx.Response(200, json={"title": "Fight Club", "releaseDate": "1999-10-15"})
+            elif req.url.path == "/api/v1/tv/1399":
+                return httpx.Response(200, json={"name": "Game of Thrones", "firstAirDate": "2011-04-17"})
+            return httpx.Response(404)
+
+        mock_jellyseer_client = httpx.AsyncClient(transport=httpx.MockTransport(jellyseer_handler))
+        jdata = asyncio.run(pull_jellyseer(mock_jellyseer_client, {"base_url": "http://fake-jellyseer", "apikey": "test-key"}))
+        assert jdata["total_requests"] == 15
+        assert jdata["pending_requests"] == 2
+        assert jdata["version"] == "1.7.0"
+        assert jdata["open_issues"] == 1
+        assert len(jdata["recent_requests"]) == 2
+        assert jdata["recent_requests"][0]["title"] == "Fight Club"
+        assert jdata["recent_requests"][0]["year"] == "1999"
+        assert jdata["recent_requests"][0]["status"] == "Available"
+        assert jdata["recent_requests"][1]["title"] == "Game of Thrones"
+        assert jdata["recent_requests"][1]["seasons"] == "S1, S2"
+        assert jdata["recent_requests"][1]["is_4k"] is True
+        print("[+] Test 4.7.3 Passed: Jellyseerr request totals, breakdown, status, and media title resolution verified.")
+
         telemetry_res = client.get("/api/telemetry", headers=headers)
         assert telemetry_res.status_code == 200, f"Telemetry failed: {telemetry_res.text}"
         data = telemetry_res.json()

@@ -265,18 +265,30 @@ const UI = {
       listHtml = `
         <div class="card-list-title">RECENT REQUESTS (${recent.length})</div>
         <div class="card-items-list">
-          ${recent.map(r => `
-            <div class="card-item-row">
-              <div class="item-row-top">
-                <span class="item-row-name" title="${esc(r.title)}">${esc(r.title)}</span>
-                <span class="item-row-meta">${esc(r.status)}</span>
+          ${recent.slice(0, 5).map(r => {
+            let statusColor = 'var(--text-dim)';
+            if (r.status === 'Available') statusColor = 'var(--status-online)';
+            else if (r.status === 'Processing' || r.status === 'Approved') statusColor = 'var(--accent)';
+            else if (r.status === 'Pending Approval') statusColor = 'var(--status-warn)';
+            else if (r.status === 'Declined') statusColor = 'var(--status-offline)';
+
+            const typeLabel = r.seasons ? `${r.media_type.toUpperCase()} (${esc(r.seasons)})` : r.media_type.toUpperCase();
+            const yearStr = r.year ? ` (${esc(r.year)})` : '';
+            const tag4k = r.is_4k ? '<span style="color: var(--accent); font-size: 8px; font-weight: bold; margin-left: 4px;">4K</span>' : '';
+
+            return `
+              <div class="card-item-row">
+                <div class="item-row-top">
+                  <span class="item-row-name" title="${esc(r.title)}">${esc(r.title)}${yearStr}${tag4k}</span>
+                  <span class="item-row-meta" style="color: ${statusColor}; font-weight: 600;">${esc(r.status)}</span>
+                </div>
+                <div class="item-row-top" style="margin-top: 2px;">
+                  <span class="item-row-meta">${typeLabel}</span>
+                  <span class="item-row-meta">By ${esc(r.requested_by)}</span>
+                </div>
               </div>
-              <div class="item-row-top" style="margin-top: 2px;">
-                <span class="item-row-meta">Type: ${esc(r.media_type)}</span>
-                <span class="item-row-meta">User: ${esc(r.requested_by)}</span>
-              </div>
-            </div>
-          `).join('')}
+            `;
+          }).join('')}
         </div>
       `;
     }
@@ -284,8 +296,12 @@ const UI = {
     return `
       <div class="stat-grid-2">
         <div class="stat-box">
-          <div class="stat-box-lbl">PENDING</div>
-          <div class="stat-box-val">${d.pending_requests || 0}</div>
+          <div class="stat-box-lbl">TOTAL REQUESTS</div>
+          <div class="stat-box-val">${d.total_requests || 0}</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-box-lbl">PENDING APPROVAL</div>
+          <div class="stat-box-val" style="color: ${d.pending_requests > 0 ? 'var(--status-warn)' : 'inherit'};">${d.pending_requests || 0}</div>
         </div>
         <div class="stat-box">
           <div class="stat-box-lbl">PROCESSING</div>
@@ -295,10 +311,12 @@ const UI = {
           <div class="stat-box-lbl">AVAILABLE</div>
           <div class="stat-box-val">${d.available_requests || 0}</div>
         </div>
-        <div class="stat-box">
-          <div class="stat-box-lbl">TOTAL</div>
-          <div class="stat-box-val">${d.total_requests || 0}</div>
-        </div>
+      </div>
+      <div style="display: flex; gap: 8px; font-size: 10px; color: var(--text-dim); margin-top: 6px; padding: 2px 4px;">
+        <span>Movies: <strong style="color: var(--text-main);">${d.movie_requests || 0}</strong></span>
+        <span>|</span>
+        <span>Series: <strong style="color: var(--text-main);">${d.tv_requests || 0}</strong></span>
+        ${d.open_issues ? `<span>|</span><span style="color: var(--status-warn);">Open Issues: <strong>${d.open_issues}</strong></span>` : ''}
       </div>
       ${listHtml}
     `;
@@ -739,12 +757,43 @@ const UI = {
     }
 
     if (type === 'jellyseer' || type === 'jellyseerr') {
-      const recent = d.recent_requests || [];
+      const allRequests = d.recent_requests || [];
+      const filter = state.detailFilter || 'all';
+      const search = (state.detailSearch || '').toLowerCase().trim();
+
+      const counts = {
+        all: allRequests.length,
+        pending: allRequests.filter(r => r.status === 'Pending Approval').length,
+        processing: allRequests.filter(r => r.status === 'Processing').length,
+        available: allRequests.filter(r => r.status === 'Available').length,
+        approved: allRequests.filter(r => r.status === 'Approved').length,
+      };
+
+      const filtered = allRequests.filter(r => {
+        if (filter === 'pending' && r.status !== 'Pending Approval') return false;
+        if (filter === 'processing' && r.status !== 'Processing') return false;
+        if (filter === 'available' && r.status !== 'Available') return false;
+        if (filter === 'approved' && r.status !== 'Approved') return false;
+        if (filter === 'movies' && r.media_type !== 'movie') return false;
+        if (filter === 'tv' && r.media_type !== 'tv') return false;
+
+        if (search) {
+          const t = (r.title || '').toLowerCase();
+          const u = (r.requested_by || '').toLowerCase();
+          if (!t.includes(search) && !u.includes(search)) return false;
+        }
+        return true;
+      });
+
       return `
         <div class="stat-grid-2" style="margin-bottom: 16px;">
           <div class="stat-box">
-            <div class="stat-box-lbl">PENDING</div>
-            <div class="stat-box-val">${d.pending_requests || 0}</div>
+            <div class="stat-box-lbl">TOTAL REQUESTS</div>
+            <div class="stat-box-val">${d.total_requests || 0}</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-box-lbl">PENDING APPROVAL</div>
+            <div class="stat-box-val" style="color: ${d.pending_requests > 0 ? 'var(--status-warn)' : 'inherit'};">${d.pending_requests || 0}</div>
           </div>
           <div class="stat-box">
             <div class="stat-box-lbl">PROCESSING</div>
@@ -755,33 +804,74 @@ const UI = {
             <div class="stat-box-val">${d.available_requests || 0}</div>
           </div>
           <div class="stat-box">
-            <div class="stat-box-lbl">TOTAL REQUESTS</div>
-            <div class="stat-box-val">${d.total_requests || 0}</div>
+            <div class="stat-box-lbl">MOVIE REQUESTS</div>
+            <div class="stat-box-val">${d.movie_requests || 0}</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-box-lbl">TV SHOW REQUESTS</div>
+            <div class="stat-box-val">${d.tv_requests || 0}</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-box-lbl">SERVER VERSION</div>
+            <div class="stat-box-val" style="font-size: 11px;">${esc(d.version || 'Jellyseerr')}</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-box-lbl">OPEN ISSUES</div>
+            <div class="stat-box-val" style="color: ${d.open_issues > 0 ? 'var(--status-warn)' : 'inherit'};">${d.open_issues || 0}</div>
           </div>
         </div>
 
-        <div class="section-title" style="margin-bottom: 8px;">RECENT REQUESTS (${recent.length})</div>
-        <div style="overflow-x: auto; max-height: 550px; overflow-y: auto; border: 1px solid var(--border-dim);">
+        <div class="detail-filters">
+          <button class="filter-chip ${filter === 'all' ? 'active' : ''}" onclick="setDetailFilter('all')">ALL (${counts.all})</button>
+          <button class="filter-chip ${filter === 'pending' ? 'active' : ''}" onclick="setDetailFilter('pending')">PENDING (${counts.pending})</button>
+          <button class="filter-chip ${filter === 'processing' ? 'active' : ''}" onclick="setDetailFilter('processing')">PROCESSING (${counts.processing})</button>
+          <button class="filter-chip ${filter === 'available' ? 'active' : ''}" onclick="setDetailFilter('available')">AVAILABLE (${counts.available})</button>
+          <button class="filter-chip ${filter === 'approved' ? 'active' : ''}" onclick="setDetailFilter('approved')">APPROVED (${counts.approved})</button>
+          <button class="filter-chip ${filter === 'movies' ? 'active' : ''}" onclick="setDetailFilter('movies')">MOVIES</button>
+          <button class="filter-chip ${filter === 'tv' ? 'active' : ''}" onclick="setDetailFilter('tv')">SERIES</button>
+          <div style="flex: 1; min-width: 180px; margin-left: auto;">
+            <input type="text" id="detail-search-input" class="input-text" style="width: 100%; padding: 4px 8px; font-size: 11px;" placeholder="Search requests by title or user..." value="${esc(search)}" oninput="handleDetailSearch(this.value)">
+          </div>
+        </div>
+
+        <div class="section-title" style="margin-top: 14px; margin-bottom: 8px;">REQUEST CATALOG (${filtered.length})</div>
+        <div style="overflow-x: auto; max-height: 500px; overflow-y: auto; border: 1px solid var(--border-dim);">
           <table class="detail-table">
             <thead>
               <tr>
-                <th>TITLE</th>
+                <th>MEDIA TITLE</th>
                 <th>TYPE</th>
+                <th>SEASONS</th>
                 <th>REQUESTED BY</th>
+                <th>DATE REQUESTED</th>
                 <th>STATUS</th>
               </tr>
             </thead>
             <tbody>
-              ${recent.length === 0 ? `
-                <tr><td colspan="4" style="text-align: center; padding: 24px; color: var(--text-dim);">No requests logged</td></tr>
-              ` : recent.map(r => `
-                <tr>
-                  <td style="font-weight: 500;">${esc(r.title)}</td>
-                  <td style="font-family: var(--font-mono); text-transform: uppercase;">${esc(r.media_type)}</td>
-                  <td style="font-family: var(--font-mono);">${esc(r.requested_by)}</td>
-                  <td style="font-family: var(--font-mono);">${esc(r.status)}</td>
-                </tr>
-              `).join('')}
+              ${filtered.length === 0 ? `
+                <tr><td colspan="6" style="text-align: center; padding: 24px; color: var(--text-dim);">No matching requests found</td></tr>
+              ` : filtered.map(r => {
+                let statusColor = 'var(--text-dim)';
+                if (r.status === 'Available') statusColor = 'var(--status-online)';
+                else if (r.status === 'Processing' || r.status === 'Approved') statusColor = 'var(--accent)';
+                else if (r.status === 'Pending Approval') statusColor = 'var(--status-warn)';
+                else if (r.status === 'Declined') statusColor = 'var(--status-offline)';
+
+                const yearStr = r.year ? ` (${esc(r.year)})` : '';
+                const tag4k = r.is_4k ? '<span style="color: var(--accent); font-size: 9px; font-weight: bold; margin-left: 6px;">4K</span>' : '';
+                const dateStr = r.created_at ? r.created_at.replace('T', ' ').substring(0, 16) : '-';
+
+                return `
+                  <tr>
+                    <td style="font-weight: 600; color: var(--text-bright);">${esc(r.title)}${yearStr}${tag4k}</td>
+                    <td style="font-family: var(--font-mono); text-transform: uppercase; font-size: 10px; color: var(--accent);">${esc(r.media_type)}</td>
+                    <td style="font-family: var(--font-mono); font-size: 11px;">${esc(r.seasons || '-')}</td>
+                    <td style="font-family: var(--font-mono);">${esc(r.requested_by)}</td>
+                    <td style="font-family: var(--font-mono); font-size: 10px; color: var(--text-dim);">${esc(dateStr)}</td>
+                    <td style="font-family: var(--font-mono); font-size: 11px; color: ${statusColor}; font-weight: 600;">${esc(r.status)}</td>
+                  </tr>
+                `;
+              }).join('')}
             </tbody>
           </table>
         </div>
