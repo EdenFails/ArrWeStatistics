@@ -113,30 +113,32 @@
               </div>
             </div>
 
-            <div class="form-group">
-              <label for="svc-url">BASE URL</label>
-              <input type="text" id="svc-url" class="input-text" placeholder="http://host.docker.internal:8085 or LAN IP" required>
-            </div>
-
             <div class="form-grid">
               <div class="form-group">
-                <label for="svc-apikey">API KEY</label>
-                <input type="password" id="svc-apikey" class="input-text" placeholder="SABnzbd / Jellyfin / Jellyseerr (leave blank for qBittorrent)">
-              </div>
-              <div class="form-group">
-                <label for="svc-user">USERNAME</label>
-                <input type="text" id="svc-user" class="input-text" placeholder="qBittorrent username">
-              </div>
-            </div>
-
-            <div class="form-grid">
-              <div class="form-group">
-                <label for="svc-password">PASSWORD</label>
-                <input type="password" id="svc-password" class="input-text" placeholder="qBittorrent password">
+                <label for="svc-url">BASE URL</label>
+                <input type="text" id="svc-url" class="input-text" placeholder="http://host.docker.internal:8085 or LAN IP" required>
               </div>
               <div class="form-group">
                 <label for="svc-order">DISPLAY ORDER</label>
                 <input type="number" id="svc-order" class="input-text" value="0">
+              </div>
+            </div>
+
+            <!-- API Key field: shown for SABnzbd, Jellyfin, Jellyseerr -->
+            <div class="form-group hidden" id="grp-svc-apikey">
+              <label for="svc-apikey">API KEY</label>
+              <input type="password" id="svc-apikey" class="input-text" placeholder="Service API key / token">
+            </div>
+
+            <!-- Credentials fields: shown for qBittorrent -->
+            <div class="form-grid" id="grp-svc-auth">
+              <div class="form-group">
+                <label for="svc-user">USERNAME</label>
+                <input type="text" id="svc-user" class="input-text" placeholder="qBittorrent username">
+              </div>
+              <div class="form-group">
+                <label for="svc-password">PASSWORD</label>
+                <input type="password" id="svc-password" class="input-text" placeholder="qBittorrent password">
               </div>
             </div>
 

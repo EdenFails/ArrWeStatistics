@@ -268,18 +268,66 @@ function hideServiceFeedback() {
   box.textContent = '';
 }
 
+function updateServiceFormFields() {
+  const typeSelect = document.getElementById('svc-type');
+  if (!typeSelect) return;
+  const stype = (typeSelect.value || 'qbittorrent').toLowerCase();
+  const grpApikey = document.getElementById('grp-svc-apikey');
+  const grpAuth = document.getElementById('grp-svc-auth');
+  const urlInput = document.getElementById('svc-url');
+  const nameInput = document.getElementById('svc-name');
+
+  if (stype === 'qbittorrent') {
+    if (grpApikey) grpApikey.classList.add('hidden');
+    if (grpAuth) grpAuth.classList.remove('hidden');
+    if (urlInput && (!urlInput.value || urlInput.value.includes('localhost') || urlInput.value.includes('docker'))) {
+      urlInput.placeholder = 'http://host.docker.internal:8085 or LAN IP';
+    }
+    if (nameInput && !nameInput.value) {
+      nameInput.placeholder = 'Primary qBittorrent';
+    }
+  } else {
+    if (grpAuth) grpAuth.classList.add('hidden');
+    if (grpApikey) grpApikey.classList.remove('hidden');
+    if (stype === 'sabnzbd') {
+      if (urlInput && (!urlInput.value || urlInput.value.includes('localhost') || urlInput.value.includes('docker'))) {
+        urlInput.placeholder = 'http://host.docker.internal:8080 or LAN IP';
+      }
+      if (nameInput && !nameInput.value) nameInput.placeholder = 'Primary SABnzbd';
+    } else if (stype === 'jellyfin') {
+      if (urlInput && (!urlInput.value || urlInput.value.includes('localhost') || urlInput.value.includes('docker'))) {
+        urlInput.placeholder = 'http://host.docker.internal:8096 or LAN IP';
+      }
+      if (nameInput && !nameInput.value) nameInput.placeholder = 'Home Jellyfin';
+    } else if (stype === 'jellyseer' || stype === 'jellyseerr') {
+      if (urlInput && (!urlInput.value || urlInput.value.includes('localhost') || urlInput.value.includes('docker'))) {
+        urlInput.placeholder = 'http://host.docker.internal:5055 or LAN IP';
+      }
+      if (nameInput && !nameInput.value) nameInput.placeholder = 'Jellyseerr';
+    }
+  }
+}
+
 function getServiceFormPayload() {
   const name = (document.getElementById('svc-name').value || '').trim();
   const service_type = (document.getElementById('svc-type').value || '').trim();
   let base_url = (document.getElementById('svc-url').value || '').trim();
-  const apikey = (document.getElementById('svc-apikey').value || '').trim() || null;
-  const username = (document.getElementById('svc-user').value || '').trim() || null;
-  const password = document.getElementById('svc-password').value || null;
   const display_order = parseInt(document.getElementById('svc-order').value || '0', 10);
   const is_enabled = document.getElementById('svc-enabled').checked ? 1 : 0;
 
   if (base_url && !base_url.startsWith('http://') && !base_url.startsWith('https://')) {
     base_url = 'http://' + base_url;
+  }
+
+  let apikey = null;
+  let username = null;
+  let password = null;
+
+  if (service_type === 'qbittorrent') {
+    username = (document.getElementById('svc-user').value || '').trim() || null;
+    password = document.getElementById('svc-password').value || null;
+  } else {
+    apikey = (document.getElementById('svc-apikey').value || '').trim() || null;
   }
 
   return {
@@ -374,6 +422,7 @@ async function handleAddService(e) {
     showServiceFeedback(`Service "${payload.name}" verified and added successfully!`, 'success');
     document.getElementById('form-add-service').reset();
     document.getElementById('svc-enabled').checked = true;
+    updateServiceFormFields();
     await loadServices();
     pollTelemetry(true);
   } catch (err) {
@@ -388,6 +437,7 @@ async function handleAddService(e) {
 function openSettings() {
   hideServiceFeedback();
   loadServices();
+  updateServiceFormFields();
   document.getElementById('overlay-settings').classList.remove('hidden');
 }
 
@@ -409,10 +459,16 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-close-settings').addEventListener('click', closeSettings);
   document.getElementById('btn-logout').addEventListener('click', handleLogout);
 
+  const typeSelect = document.getElementById('svc-type');
+  if (typeSelect) {
+    typeSelect.addEventListener('change', updateServiceFormFields);
+  }
+
   const btnTest = document.getElementById('btn-test-service');
   if (btnTest) {
     btnTest.addEventListener('click', handleTestServiceClick);
   }
 
   document.getElementById('form-add-service').addEventListener('submit', handleAddService);
+  updateServiceFormFields();
 });
