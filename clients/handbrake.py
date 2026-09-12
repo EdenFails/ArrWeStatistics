@@ -240,7 +240,26 @@ async def _read_docker_container_logs(container_name: str, tail: int = 100) -> s
         if "NotFound" in type(e).__name__ or "404" in str(e):
             raise ValueError(f"Docker container '{container_name}' not found. Verify container name.")
 
-    # 2. Try Unix domain socket /var/run/docker.sock via httpx
+    # 2. Try DOCKER_HOST environment variable if set (e.g. tcp://host.docker.internal:2375)
+    docker_host = os.environ.get("DOCKER_HOST", "").strip()
+    if docker_host and (docker_host.startswith("tcp://") or docker_host.startswith("http://") or docker_host.startswith("https://")):
+        endpoint = docker_host.replace("tcp://", "http://").rstrip("/")
+        try:
+            url = f"{endpoint}/containers/{container_name}/logs?stdout=1&stderr=1&tail={tail}"
+            async with httpx.AsyncClient(timeout=6.0) as d_client:
+                res = await d_client.get(url)
+                if res.status_code == 200:
+                    return _clean_docker_multiplexed_stream(res.content)
+                elif res.status_code == 404:
+                    raise ValueError(f"Docker container '{container_name}' not found on Docker host {endpoint}.")
+                else:
+                    raise ValueError(f"Docker host returned HTTP {res.status_code}: {res.text}")
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ConnectionError(f"Failed to communicate with DOCKER_HOST at {endpoint}: {e}")
+
+    # 3. Try Unix domain socket /var/run/docker.sock via httpx
     sock_path = "/var/run/docker.sock"
     if os.path.exists(sock_path):
         try:
@@ -260,10 +279,10 @@ async def _read_docker_container_logs(container_name: str, tail: int = 100) -> s
             raise ConnectionError(f"Failed to communicate with Docker socket at {sock_path}: {e}")
 
     raise ValueError(
-        f"Cannot read logs from Docker container '{container_name}'. "
-        f"Ensure container '{container_name}' is running, and either mount /var/run/docker.sock:/var/run/docker.sock:ro "
-        f"or install the 'docker' Python package."
+        f"Docker socket not accessible. Because ArrWeStatistics runs in Docker, you must mount the Docker socket so it can inspect other containers. "
+        f"Add '- /var/run/docker.sock:/var/run/docker.sock:ro' to ArrWeStatistics's volumes in your docker-compose.yml."
     )
+
 
 
 async def pull_handbrake(client: httpx.AsyncClient, svc: dict) -> dict:
