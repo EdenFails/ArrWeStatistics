@@ -233,8 +233,8 @@ def modify_service(
         conn.close()
         return False
 
-    final_key = cur["apikey"] if apikey == "••••••••" else apikey
-    final_pw = cur["password"] if password == "••••••••" else password
+    final_key = cur["apikey"] if (apikey in ("••••••••", "", None)) else apikey
+    final_pw = cur["password"] if (password in ("••••••••", "", None)) else password
 
     c.execute(
         """UPDATE services SET 

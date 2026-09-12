@@ -119,6 +119,29 @@ def run_tests():
         assert add_res.json()["password"] == "••••••••", "Plaintext password exposed in response!"
         print("[+] Test 4.7 Passed: Service created and secrets properly masked.")
 
+        # Test updating service display_order and verifying secret preservation
+        edit_res = client.put(
+            f"/api/services/{new_service_id}",
+            json={
+                "name": "Home qBittorrent Updated",
+                "service_type": "qbittorrent",
+                "base_url": "http://192.168.1.150:8080",
+                "username": "admin_updated",
+                "password": None,  # keep existing password
+                "is_enabled": 1,
+                "display_order": 5,
+            },
+            headers=headers,
+        )
+        assert edit_res.status_code == 200, f"Failed to update service: {edit_res.text}"
+        updated_data = edit_res.json()
+        assert updated_data["name"] == "Home qBittorrent Updated"
+        assert updated_data["display_order"] == 5
+        # Verify secret was preserved in database
+        raw_svc = db.fetch_service_by_id(new_service_id, include_secrets=True)
+        assert raw_svc["password"] == "supersecretpassword", "Password secret was erased on update!"
+        print("[+] Test 4.7.0 Passed: Service update (PUT) with secret preservation and display_order verified.")
+
         test_cfg_res = client.post(
             "/api/services/test-config",
             json={
@@ -179,6 +202,22 @@ def run_tests():
         assert pools[0]["total_bytes"] > 0
         assert pools[0]["is_accessible"] is True
         print("[+] Test 4.10.1 Passed: Storage pool creation and disk_usage telemetry verified.")
+
+        # Test updating storage pool display_order
+        edit_storage = client.put(
+            f"/api/storage/{smid}",
+            json={
+                "name": "Media Pool Updated",
+                "mount_path": tempfile.gettempdir(),
+                "display_order": 10,
+                "is_enabled": 1,
+                "folders": ["test_sub1"],
+            },
+            headers=headers,
+        )
+        assert edit_storage.status_code == 200, f"Storage update failed: {edit_storage.text}"
+        assert edit_storage.json()["display_order"] == 10
+        print("[+] Test 4.10.1.1 Passed: Storage pool update (PUT) verified.")
 
         browse_res = client.get(f"/api/filesystem/browse?path={tempfile.gettempdir()}", headers=headers)
         assert browse_res.status_code == 200

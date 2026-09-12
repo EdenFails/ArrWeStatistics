@@ -9,6 +9,8 @@ const state = {
   detailSearch: '',
   pollTimer: null,
   pollIntervalMs: 5000,
+  editingServiceId: null,
+  editingStorageId: null,
 };
 
 async function api(url, opts = {}) {
@@ -235,15 +237,77 @@ function renderServicesTable() {
     <div class="svc-row">
       <div class="svc-row-info">
         <span class="svc-row-name">${esc(s.name)} [${esc(s.service_type.toUpperCase())}]</span>
-        <span class="svc-row-meta">${esc(s.base_url)} | ${s.is_enabled ? 'ENABLED' : 'DISABLED'}</span>
+        <span class="svc-row-meta">Order: ${s.display_order} | ${esc(s.base_url)} | ${s.is_enabled ? 'ENABLED' : 'DISABLED'}</span>
       </div>
       <div class="svc-row-actions">
+        <button class="btn btn-sm" onclick="editServiceTarget(${s.id})">EDIT</button>
         <button class="btn btn-sm" onclick="testServiceTarget(${s.id})">TEST</button>
         <button class="btn btn-sm btn-danger" onclick="deleteServiceTarget(${s.id})">DELETE</button>
       </div>
     </div>
   `).join('');
 }
+
+window.editServiceTarget = function(id) {
+  hideServiceFeedback();
+  const s = state.services.find(item => item.id === id);
+  if (!s) return;
+
+  state.editingServiceId = id;
+
+  document.getElementById('svc-name').value = s.name || '';
+  document.getElementById('svc-type').value = s.service_type || 'qbittorrent';
+  document.getElementById('svc-url').value = s.base_url || '';
+  document.getElementById('svc-order').value = s.display_order ?? 0;
+  document.getElementById('svc-user').value = s.username || '';
+  document.getElementById('svc-enabled').checked = s.is_enabled !== 0;
+
+  updateServiceFormFields();
+
+  const apiKeyInput = document.getElementById('svc-apikey');
+  const passwordInput = document.getElementById('svc-password');
+  if (apiKeyInput) {
+    apiKeyInput.value = '';
+    apiKeyInput.placeholder = s.has_apikey
+      ? '•••••••• (saved - leave blank to keep existing key)'
+      : 'Auth key / API token';
+  }
+  if (passwordInput) {
+    passwordInput.value = '';
+    passwordInput.placeholder = '•••••••• (saved - leave blank to keep existing password)';
+  }
+
+  const titleEl = document.getElementById('form-service-title');
+  if (titleEl) titleEl.textContent = `EDIT SERVICE: ${s.name.toUpperCase()}`;
+
+  const btnSave = document.getElementById('btn-save-service');
+  if (btnSave) btnSave.textContent = 'UPDATE SERVICE';
+
+  const btnCancel = document.getElementById('btn-cancel-edit-service');
+  if (btnCancel) btnCancel.classList.remove('hidden');
+
+  const form = document.getElementById('form-add-service');
+  if (form) form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+};
+
+window.cancelEditService = function() {
+  state.editingServiceId = null;
+  const form = document.getElementById('form-add-service');
+  if (form) form.reset();
+  document.getElementById('svc-enabled').checked = true;
+
+  const titleEl = document.getElementById('form-service-title');
+  if (titleEl) titleEl.textContent = 'REGISTER SERVICE';
+
+  const btnSave = document.getElementById('btn-save-service');
+  if (btnSave) btnSave.textContent = 'TEST & SAVE';
+
+  const btnCancel = document.getElementById('btn-cancel-edit-service');
+  if (btnCancel) btnCancel.classList.add('hidden');
+
+  hideServiceFeedback();
+  updateServiceFormFields();
+};
 
 window.testServiceTarget = async function(id) {
   try {
@@ -258,6 +322,9 @@ window.deleteServiceTarget = async function(id) {
   if (!confirm('Delete this service configuration?')) return;
   try {
     await api(`/api/services/${id}`, { method: 'DELETE' });
+    if (state.editingServiceId === id) {
+      cancelEditService();
+    }
     await loadServices();
     pollTelemetry(true);
   } catch (err) {
@@ -331,6 +398,15 @@ function updateServiceFormFields() {
       if (nameInput && !nameInput.value) nameInput.placeholder = 'Jellyseerr';
     }
   }
+  if (state.editingServiceId) {
+    const s = state.services.find(item => item.id === state.editingServiceId);
+    if (s && s.has_apikey && apiKeyInput && !apiKeyInput.value) {
+      apiKeyInput.placeholder = '•••••••• (saved - leave blank to keep existing key)';
+    }
+    if (passwordInput && !passwordInput.value) {
+      passwordInput.placeholder = '•••••••• (saved - leave blank to keep existing password)';
+    }
+  }
 }
 
 function getServiceFormPayload() {
@@ -374,10 +450,15 @@ async function handleTestServiceClick() {
   showServiceFeedback('Testing connection to target...', 'info');
 
   try {
-    const res = await api('/api/services/test-config', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+    let res;
+    if (state.editingServiceId && !payload.apikey && !payload.password) {
+      res = await api(`/api/services/${state.editingServiceId}/test`, { method: 'POST' });
+    } else {
+      res = await api('/api/services/test-config', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    }
 
     if (res.status === 'online') {
       showServiceFeedback(`Connection verified! Response time: ${res.response_time_ms}ms. Configuration is valid.`, 'success');
@@ -411,6 +492,29 @@ async function handleAddService(e) {
   if (btnTest) btnTest.disabled = true;
   btnSave.disabled = true;
   const originalSaveText = btnSave.textContent;
+
+  if (state.editingServiceId) {
+    btnSave.textContent = 'UPDATING...';
+    try {
+      await api(`/api/services/${state.editingServiceId}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      });
+
+      showServiceFeedback(`Service "${payload.name}" updated successfully!`, 'success');
+      cancelEditService();
+      await loadServices();
+      pollTelemetry(true);
+    } catch (err) {
+      showServiceFeedback(`Update error: ${err.message}`, 'error');
+    } finally {
+      if (btnTest) btnTest.disabled = false;
+      btnSave.disabled = false;
+      btnSave.textContent = state.editingServiceId ? 'UPDATE SERVICE' : originalSaveText;
+    }
+    return;
+  }
+
   btnSave.textContent = 'TESTING...';
   showServiceFeedback('Testing target before saving...', 'info');
 
@@ -426,7 +530,6 @@ async function handleAddService(e) {
         msg += ' (Docker note: "localhost" refers to the container itself. Use http://host.docker.internal:PORT or your host LAN IP e.g. http://192.168.x.x:PORT).';
       }
       showServiceFeedback(`Cannot save: ${msg}. Please edit connection settings and try again.`, 'error');
-      // Do not reset form - user can edit and retry immediately!
       return;
     }
 
@@ -540,16 +643,71 @@ function renderStorageTable() {
       <div class="svc-row-info">
         <span class="svc-row-name">${esc(p.name)} [${esc(p.mount_path)}]</span>
         <span class="svc-row-meta">
-          Folders: ${(p.folders || []).map(f => esc(f.name)).join(', ') || 'None'} | ${p.is_enabled ? 'ENABLED' : 'DISABLED'}
+          Order: ${p.display_order} | Folders: ${(p.folders || []).map(f => esc(f.name)).join(', ') || 'None'} | ${p.is_enabled ? 'ENABLED' : 'DISABLED'}
         </span>
       </div>
       <div class="svc-row-actions">
+        <button class="btn btn-sm" onclick="editStorageMountTarget(${p.id})">EDIT</button>
         <button class="btn btn-sm" onclick="scanStorageMountTarget(${p.id}, event)">SCAN</button>
         <button class="btn btn-sm btn-danger" onclick="deleteStorageMountTarget(${p.id})">DELETE</button>
       </div>
     </div>
   `).join('');
 }
+
+window.editStorageMountTarget = function(id) {
+  hideStorageFeedback();
+  const pool = state.storagePools.find(p => p.id === id);
+  if (!pool) return;
+
+  state.editingStorageId = id;
+
+  document.getElementById('storage-name').value = pool.name || '';
+  document.getElementById('storage-path').value = pool.mount_path || '';
+  document.getElementById('storage-order').value = pool.display_order ?? 0;
+  document.getElementById('storage-enabled').checked = pool.is_enabled !== 0;
+
+  browserState.watchedFolders.clear();
+  if (pool.folders && Array.isArray(pool.folders)) {
+    pool.folders.forEach(f => {
+      const folderName = typeof f === 'string' ? f : (f.name || '');
+      if (folderName) browserState.watchedFolders.add(folderName);
+    });
+  }
+  syncWatchedFoldersInput();
+
+  const titleEl = document.getElementById('form-storage-title');
+  if (titleEl) titleEl.textContent = `EDIT STORAGE POOL: ${pool.name.toUpperCase()}`;
+
+  const btnSave = document.getElementById('btn-save-storage');
+  if (btnSave) btnSave.textContent = 'UPDATE STORAGE POOL';
+
+  const btnCancel = document.getElementById('btn-cancel-edit-storage');
+  if (btnCancel) btnCancel.classList.remove('hidden');
+
+  const form = document.getElementById('form-add-storage');
+  if (form) form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+};
+
+window.cancelEditStorage = function() {
+  state.editingStorageId = null;
+  const form = document.getElementById('form-add-storage');
+  if (form) form.reset();
+  document.getElementById('storage-enabled').checked = true;
+  browserState.watchedFolders.clear();
+  syncWatchedFoldersInput();
+
+  const titleEl = document.getElementById('form-storage-title');
+  if (titleEl) titleEl.textContent = 'REGISTER STORAGE POOL';
+
+  const btnSave = document.getElementById('btn-save-storage');
+  if (btnSave) btnSave.textContent = 'SAVE STORAGE POOL';
+
+  const btnCancel = document.getElementById('btn-cancel-edit-storage');
+  if (btnCancel) btnCancel.classList.add('hidden');
+
+  hideStorageFeedback();
+};
 
 window.scanStorageMountTarget = async function(id, e) {
   if (e) {
@@ -571,6 +729,9 @@ window.deleteStorageMountTarget = async function(id) {
   if (!confirm('Delete this storage pool configuration?')) return;
   try {
     await api(`/api/storage/${id}`, { method: 'DELETE' });
+    if (state.editingStorageId === id) {
+      cancelEditStorage();
+    }
     await loadStoragePools();
   } catch (err) {
     alert(err.message);
@@ -615,20 +776,38 @@ async function handleAddStorage(e) {
   if (btnSave) btnSave.disabled = true;
 
   try {
-    await api('/api/storage', {
-      method: 'POST',
-      body: JSON.stringify({
-        name,
-        mount_path,
-        folders,
-        display_order: isNaN(display_order) ? 0 : display_order,
-        is_enabled,
-      }),
-    });
+    if (state.editingStorageId) {
+      await api(`/api/storage/${state.editingStorageId}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          name,
+          mount_path,
+          folders,
+          display_order: isNaN(display_order) ? 0 : display_order,
+          is_enabled,
+        }),
+      });
 
-    showStorageFeedback(`Storage pool "${name}" added successfully!`, 'success');
-    document.getElementById('form-add-storage').reset();
-    document.getElementById('storage-enabled').checked = true;
+      showStorageFeedback(`Storage pool "${name}" updated successfully!`, 'success');
+      cancelEditStorage();
+    } else {
+      await api('/api/storage', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          mount_path,
+          folders,
+          display_order: isNaN(display_order) ? 0 : display_order,
+          is_enabled,
+        }),
+      });
+
+      showStorageFeedback(`Storage pool "${name}" added successfully!`, 'success');
+      document.getElementById('form-add-storage').reset();
+      document.getElementById('storage-enabled').checked = true;
+      browserState.watchedFolders.clear();
+      syncWatchedFoldersInput();
+    }
     await loadStoragePools();
   } catch (err) {
     showStorageFeedback(`Error: ${err.message}`, 'error');
@@ -639,6 +818,8 @@ async function handleAddStorage(e) {
 
 // Configuration Tabs
 function switchSettingsTab(tabName) {
+  cancelEditService();
+  cancelEditStorage();
   const tabBtnServices = document.getElementById('tab-btn-services');
   const tabBtnStorage = document.getElementById('tab-btn-storage');
   const panelServices = document.getElementById('tab-panel-services');
@@ -668,6 +849,8 @@ function openSettings(defaultTab = 'services') {
 }
 
 function closeSettings() {
+  cancelEditService();
+  cancelEditStorage();
   document.getElementById('overlay-settings').classList.add('hidden');
 }
 
@@ -931,13 +1114,18 @@ document.addEventListener('DOMContentLoaded', () => {
     btnTest.addEventListener('click', handleTestServiceClick);
   }
 
+  const btnCancelService = document.getElementById('btn-cancel-edit-service');
+  if (btnCancelService) {
+    btnCancelService.addEventListener('click', cancelEditService);
+  }
+
+  const btnCancelStorage = document.getElementById('btn-cancel-edit-storage');
+  if (btnCancelStorage) {
+    btnCancelStorage.addEventListener('click', cancelEditStorage);
+  }
+
   document.getElementById('form-add-service').addEventListener('submit', handleAddService);
-  document.getElementById('form-add-storage').addEventListener('submit', (e) => {
-    handleAddStorage(e).then(() => {
-      browserState.watchedFolders.clear();
-      syncWatchedFoldersInput();
-    });
-  });
+  document.getElementById('form-add-storage').addEventListener('submit', handleAddStorage);
 
   // Detail Modal Close
   const btnCloseDetail = document.getElementById('btn-close-detail');

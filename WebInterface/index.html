@@ -126,7 +126,7 @@
             <div class="section-title">ACTIVE TARGETS</div>
             <div id="services-list" class="services-table"></div>
 
-            <div class="section-title" style="margin-top: 16px;">REGISTER SERVICE</div>
+            <div class="section-title" id="form-service-title" style="margin-top: 16px;">REGISTER SERVICE</div>
             <form id="form-add-service">
               <div class="form-grid">
                 <div class="form-group">
@@ -183,6 +183,7 @@
               <div style="display: flex; gap: 8px; margin-top: 14px;">
                 <button type="button" id="btn-test-service" class="btn">TEST CONNECTION</button>
                 <button type="submit" id="btn-save-service" class="btn btn-primary" style="flex: 1;">TEST & SAVE</button>
+                <button type="button" id="btn-cancel-edit-service" class="btn btn-subtle hidden">CANCEL</button>
               </div>
             </form>
           </div>
@@ -192,7 +193,7 @@
             <div class="section-title">CONFIGURED STORAGE POOLS</div>
             <div id="storage-list" class="services-table"></div>
 
-            <div class="section-title" style="margin-top: 16px;">REGISTER STORAGE POOL</div>
+            <div class="section-title" id="form-storage-title" style="margin-top: 16px;">REGISTER STORAGE POOL</div>
             <form id="form-add-storage">
               <div class="form-grid">
                 <div class="form-group">
@@ -235,7 +236,10 @@
               </div>
 
               <div id="storage-feedback" class="form-feedback hidden"></div>
-              <button type="submit" id="btn-save-storage" class="btn btn-primary" style="margin-top: 8px;">SAVE STORAGE POOL</button>
+              <div style="display: flex; gap: 8px; margin-top: 8px;">
+                <button type="submit" id="btn-save-storage" class="btn btn-primary" style="flex: 1;">SAVE STORAGE POOL</button>
+                <button type="button" id="btn-cancel-edit-storage" class="btn btn-subtle hidden">CANCEL</button>
+              </div>
             </form>
           </div>
         </div>
