@@ -80,11 +80,14 @@
       <main class="dashboard-body">
         <div class="system-section" id="section-system" style="margin-bottom: 24px;">
           <div class="section-title" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <span>HOST SYSTEM &amp; HARDWARE</span>
-            <span id="sys-host-summary" style="font-size: 10px; font-family: var(--font-mono); color: var(--text-dim);"></span>
+            <span>HOST SYSTEM, HARDWARE &amp; STORAGE</span>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span id="sys-host-summary" style="font-size: 10px; font-family: var(--font-mono); color: var(--text-dim);"></span>
+              <button id="btn-open-storage-modal" class="btn btn-sm">+ ADD DRIVE / POOL</button>
+            </div>
           </div>
           <div id="system-container" class="cards-grid">
-            <!-- CPU/RAM & GPU Cards rendered dynamically -->
+            <!-- CPU/RAM, GPU & Storage Cards rendered together in the same slot -->
           </div>
         </div>
 
@@ -93,16 +96,6 @@
         </div>
         <div id="cards-container" class="cards-grid">
           <div class="empty-state">No services registered or active. Open Services menu to configure targets.</div>
-        </div>
-
-        <div class="storage-section" style="margin-top: 24px;">
-          <div class="section-title" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <span>STORAGE POOLS &amp; VOLUMES</span>
-            <button id="btn-open-storage-modal" class="btn btn-sm">+ ADD DRIVE / POOL</button>
-          </div>
-          <div id="storage-container" class="cards-grid">
-            <div class="empty-state">No storage pools configured. Click "+ ADD DRIVE / POOL" to monitor your MergerFS or host drives.</div>
-          </div>
         </div>
       </main>
     </div>

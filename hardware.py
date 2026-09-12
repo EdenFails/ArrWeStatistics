@@ -326,6 +326,57 @@ def _get_windows_adapters() -> list[dict[str, Any]]:
     return adapters
 
 
+# Known PCI device IDs mapping: (Marketing Name, Default VRAM Bytes)
+_DRM_PCI_DEVICE_MAP: dict[str, tuple[str, int]] = {
+    # Intel Battlemage (Xe2)
+    "0xe202": ("Intel Arc B580 Graphics", 12 * 1024**3),
+    "0xe20b": ("Intel Arc B580 Graphics", 12 * 1024**3),
+    "0xe212": ("Intel Arc B580 Graphics", 12 * 1024**3),
+    "0xe20c": ("Intel Arc B570 Graphics", 10 * 1024**3),
+    "0xe200": ("Intel Arc Battlemage Graphics", 12 * 1024**3),
+    "0xe201": ("Intel Arc Battlemage Graphics", 12 * 1024**3),
+    "0xe203": ("Intel Arc Battlemage Graphics", 12 * 1024**3),
+    "0xe20d": ("Intel Arc Battlemage Graphics", 12 * 1024**3),
+    "0xe20e": ("Intel Arc Battlemage Graphics", 12 * 1024**3),
+    "0xe20f": ("Intel Arc Battlemage Graphics", 12 * 1024**3),
+    "0xe210": ("Intel Arc Battlemage Graphics", 12 * 1024**3),
+    "0xe211": ("Intel Arc Battlemage Graphics", 12 * 1024**3),
+
+    # Intel Alchemist (DG2 / Xe-HPG)
+    "0x56a0": ("Intel Arc A770 Graphics", 16 * 1024**3),
+    "0x56a1": ("Intel Arc A750 Graphics", 8 * 1024**3),
+    "0x56a2": ("Intel Arc A580 Graphics", 8 * 1024**3),
+    "0x56a5": ("Intel Arc A380 Graphics", 6 * 1024**3),
+    "0x56a6": ("Intel Arc A310 Graphics", 4 * 1024**3),
+    "0x5690": ("Intel Arc A770M Graphics", 16 * 1024**3),
+    "0x5691": ("Intel Arc A730M Graphics", 12 * 1024**3),
+    "0x5692": ("Intel Arc A550M Graphics", 8 * 1024**3),
+    "0x5693": ("Intel Arc A370M Graphics", 4 * 1024**3),
+    "0x5694": ("Intel Arc A350M Graphics", 4 * 1024**3),
+    "0x5695": ("Intel Arc A570M Graphics", 8 * 1024**3),
+    "0x5696": ("Intel Arc A530M Graphics", 4 * 1024**3),
+    "0x56b0": ("Intel Data Center GPU Flex 140", 12 * 1024**3),
+    "0x56b1": ("Intel Data Center GPU Flex 170", 16 * 1024**3),
+    "0x56b2": ("Intel Arc Pro A40 Graphics", 6 * 1024**3),
+    "0x56b3": ("Intel Arc Pro A50 Graphics", 6 * 1024**3),
+    "0x56ba": ("Intel Arc Pro A60 Graphics", 12 * 1024**3),
+    "0x56bb": ("Intel Arc Pro A30M Graphics", 4 * 1024**3),
+    "0x56bc": ("Intel Arc Pro A60M Graphics", 8 * 1024**3),
+
+    # Intel Core Ultra / Lunar Lake / Meteor Lake / Arrow Lake
+    "0x6420": ("Intel Arc 140V Graphics", 0),
+    "0x64a0": ("Intel Arc 140V Graphics", 0),
+    "0x64b0": ("Intel Arc 130V Graphics", 0),
+    "0x7d40": ("Intel Arc Graphics", 0),
+    "0x7d45": ("Intel Arc Graphics", 0),
+    "0x7d55": ("Intel Arc Graphics", 0),
+    "0x7d60": ("Intel Arc Graphics", 0),
+    "0x7d67": ("Intel Arc Graphics", 0),
+    "0x7d51": ("Intel Graphics", 0),
+    "0x7d68": ("Intel Graphics", 0),
+}
+
+
 def _query_linux_drm_gpus() -> list[dict[str, Any]]:
     """Reads Linux DRM subsystem /sys/class/drm/card* (Intel Battlemage/Arc, AMD, NVIDIA)."""
     gpus = []
@@ -356,65 +407,264 @@ def _query_linux_drm_gpus() -> list[dict[str, Any]]:
                 except Exception:
                     pass
 
-            gpu_util = 0.0
-            busy_file = os.path.join(dev_path, "gpu_busy_percent")
-            if os.path.exists(busy_file):
+            # Detect Kernel Driver
+            driver_name = "Linux DRM Kernel"
+            drv_base = ""
+            driver_link = os.path.join(dev_path, "driver")
+            if os.path.exists(driver_link):
                 try:
-                    with open(busy_file, "r") as f:
-                        gpu_util = float(f.read().strip())
+                    drv_base = os.path.basename(os.path.realpath(driver_link)).lower()
+                    if drv_base == "xe":
+                        driver_name = "Intel Xe Kernel Driver"
+                    elif drv_base == "i915":
+                        driver_name = "Intel i915 Driver"
+                    elif drv_base == "amdgpu":
+                        driver_name = "AMD amdgpu Driver"
+                    elif drv_base == "nouveau":
+                        driver_name = "Nouveau DRM Driver"
+                    elif drv_base:
+                        driver_name = f"{drv_base.upper()} Driver"
                 except Exception:
                     pass
 
-            # Intel GPU Frequency
-            freq_mhz = None
-            for f_cand in (
-                os.path.join(card_path, "gt/gt0/act_freq_mhz"),
-                os.path.join(card_path, "gt/gt0/rps_act_freq_mhz"),
-                os.path.join(card_path, "gt_act_freq_mhz"),
-            ):
-                if os.path.exists(f_cand):
-                    try:
-                        with open(f_cand, "r") as f:
-                            freq_mhz = float(f.read().strip())
-                        break
-                    except Exception:
-                        pass
-
-            # Temperature & Power from hwmon
-            temp_c = None
-            power_w = None
-            hwmon_dir = os.path.join(dev_path, "hwmon")
-            if os.path.exists(hwmon_dir):
-                try:
-                    for h in os.listdir(hwmon_dir):
-                        h_path = os.path.join(hwmon_dir, h)
-                        t_file = os.path.join(h_path, "temp1_input")
-                        if os.path.exists(t_file):
-                            with open(t_file, "r") as f:
-                                temp_c = round(float(f.read().strip()) / 1000.0, 1)
-                        p_file = os.path.join(h_path, "power1_input")
-                        if os.path.exists(p_file):
-                            with open(p_file, "r") as f:
-                                power_w = round(float(f.read().strip()) / 1000000.0, 1)
-                except Exception:
-                    pass
-
+            # Detect GPU Model Name and Default VRAM
+            default_vram = 0
             vendor_names = {
                 "intel": f"Intel Graphics ({c})",
                 "amd": f"AMD Radeon ({c})",
                 "nvidia": f"NVIDIA GPU ({c})",
                 "other": f"GPU ({c})",
             }
+            gpu_name = vendor_names.get(vendor, f"GPU ({c})")
+
+            dev_id_file = os.path.join(dev_path, "device")
+            if os.path.exists(dev_id_file):
+                try:
+                    with open(dev_id_file, "r") as f:
+                        d_hex = f.read().strip().lower()
+                    if not d_hex.startswith("0x"):
+                        d_hex = f"0x{d_hex}"
+                    if d_hex in _DRM_PCI_DEVICE_MAP:
+                        mapped_name, mapped_vram = _DRM_PCI_DEVICE_MAP[d_hex]
+                        gpu_name = mapped_name
+                        default_vram = mapped_vram
+                except Exception:
+                    pass
+
+            # Fallback to lspci if still generic
+            if (gpu_name.startswith("Intel Graphics") or gpu_name.startswith("GPU (")) and shutil.which("lspci"):
+                try:
+                    pci_slot = os.path.basename(os.path.realpath(dev_path))
+                    p = subprocess.run(["lspci", "-s", pci_slot], capture_output=True, text=True, timeout=1.0)
+                    if p.returncode == 0 and p.stdout.strip():
+                        m = re.search(r":\s*(?:Intel Corporation|Advanced Micro Devices|NVIDIA Corporation)?\s*(.*?)(?:\(rev|\n|$)", p.stdout)
+                        if m and m.group(1).strip():
+                            clean_name = m.group(1).strip()
+                            bracket = re.search(r"\[(.*?)\]", clean_name)
+                            if bracket:
+                                clean_name = bracket.group(1).strip()
+                            if "intel" not in clean_name.lower() and vendor == "intel":
+                                clean_name = f"Intel {clean_name}"
+                            gpu_name = clean_name
+                except Exception:
+                    pass
+
+            # GPU Core Utilization
+            gpu_util = 0.0
+            for busy_cand in (
+                os.path.join(dev_path, "gpu_busy_percent"),
+                os.path.join(card_path, "device/tile0/gt0/busy_percent"),
+                os.path.join(card_path, "gt/gt0/busy_percent"),
+                os.path.join(card_path, "device/gpu_busy_percent"),
+            ):
+                if os.path.exists(busy_cand):
+                    try:
+                        with open(busy_cand, "r") as f:
+                            gpu_util = float(f.read().strip())
+                        break
+                    except Exception:
+                        pass
+
+            # GPU Frequency
+            freq_mhz = None
+            for f_cand in (
+                os.path.join(card_path, "device/tile0/gt0/act_freq_mhz"),
+                os.path.join(card_path, "device/tile0/gt0/freq_act"),
+                os.path.join(card_path, "device/tile0/gt0/freq_cur"),
+                os.path.join(card_path, "gt/gt0/act_freq_mhz"),
+                os.path.join(card_path, "gt/gt0/rps_act_freq_mhz"),
+                os.path.join(card_path, "gt_act_freq_mhz"),
+                os.path.join(dev_path, "pp_dpm_sclk"),
+            ):
+                if os.path.exists(f_cand):
+                    try:
+                        with open(f_cand, "r") as f:
+                            content = f.read().strip()
+                        if f_cand.endswith("pp_dpm_sclk"):
+                            for line in content.splitlines():
+                                if "*" in line:
+                                    m_mhz = re.search(r"(\d+)\s*mhz", line, re.IGNORECASE)
+                                    if m_mhz:
+                                        freq_mhz = float(m_mhz.group(1))
+                                        break
+                        else:
+                            raw_freq = float(content)
+                            if raw_freq > 1000000:
+                                freq_mhz = round(raw_freq / 1000000.0, 1)
+                            elif raw_freq > 10000:
+                                freq_mhz = round(raw_freq / 1000.0, 1)
+                            elif raw_freq > 0:
+                                freq_mhz = round(raw_freq, 1)
+                        if freq_mhz and freq_mhz > 0:
+                            break
+                    except Exception:
+                        pass
+
+            # VRAM Detection
+            vram_total = 0
+            vram_used = 0
+
+            vram_tot_cands = (
+                os.path.join(card_path, "device/tile0/vram_total_bytes"),
+                os.path.join(card_path, "device/tile0/vram0/total_bytes"),
+                os.path.join(card_path, "device/lmem_total_bytes"),
+                os.path.join(card_path, "lmem_total_bytes"),
+                os.path.join(dev_path, "mem_info_vram_total"),
+            )
+            for f_c in vram_tot_cands:
+                if os.path.exists(f_c):
+                    try:
+                        with open(f_c, "r") as f:
+                            vram_total = int(f.read().strip())
+                        if vram_total > 0:
+                            break
+                    except Exception:
+                        pass
+
+            vram_used_cands = (
+                os.path.join(card_path, "device/tile0/vram_used_bytes"),
+                os.path.join(card_path, "device/tile0/vram0/used_bytes"),
+                os.path.join(card_path, "device/lmem_used_bytes"),
+                os.path.join(card_path, "lmem_used_bytes"),
+                os.path.join(dev_path, "mem_info_vram_used"),
+            )
+            for f_c in vram_used_cands:
+                if os.path.exists(f_c):
+                    try:
+                        with open(f_c, "r") as f:
+                            vram_used = int(f.read().strip())
+                        if vram_used > 0:
+                            break
+                    except Exception:
+                        pass
+
+            # Check PCI BAR2 aperture if vram_total not found
+            if vram_total == 0:
+                res_file = os.path.join(dev_path, "resource")
+                if os.path.exists(res_file):
+                    try:
+                        with open(res_file, "r") as f:
+                            for line in f:
+                                parts = line.strip().split()
+                                if len(parts) >= 2:
+                                    start = int(parts[0], 16)
+                                    end = int(parts[1], 16)
+                                    if end > start:
+                                        bar_size = end - start + 1
+                                        if (2 * 1024**3) <= bar_size <= (64 * 1024**3):
+                                            vram_total = max(vram_total, bar_size)
+                    except Exception:
+                        pass
+
+            # Model database fallback
+            if vram_total == 0 and default_vram > 0:
+                vram_total = default_vram
+
+            vram_pct = round((vram_used / vram_total * 100.0), 1) if (vram_total > 0 and vram_used > 0) else 0.0
+
+            # Temperature & Power from hwmon (local + global /sys/class/hwmon scan)
+            temp_c = None
+            power_w = None
+            hwmon_dirs: list[str] = []
+
+            dev_hwmon = os.path.join(dev_path, "hwmon")
+            if os.path.exists(dev_hwmon):
+                try:
+                    hwmon_dirs.extend([os.path.join(dev_hwmon, h) for h in os.listdir(dev_hwmon)])
+                except Exception:
+                    pass
+
+            card_hwmon = os.path.join(card_path, "hwmon")
+            if os.path.exists(card_hwmon):
+                try:
+                    hwmon_dirs.extend([os.path.join(card_hwmon, h) for h in os.listdir(card_hwmon)])
+                except Exception:
+                    pass
+
+            if os.path.exists("/sys/class/hwmon"):
+                try:
+                    dev_real = os.path.realpath(dev_path)
+                    for h in os.listdir("/sys/class/hwmon"):
+                        h_path = os.path.join("/sys/class/hwmon", h)
+                        if h_path in hwmon_dirs:
+                            continue
+                        h_dev_link = os.path.join(h_path, "device")
+                        if os.path.exists(h_dev_link):
+                            try:
+                                h_dev_real = os.path.realpath(h_dev_link)
+                                if h_dev_real == dev_real or dev_real in h_dev_real or h_dev_real in dev_real:
+                                    hwmon_dirs.append(h_path)
+                                    continue
+                            except Exception:
+                                pass
+                        name_file = os.path.join(h_path, "name")
+                        if os.path.exists(name_file):
+                            try:
+                                with open(name_file, "r") as f:
+                                    h_name = f.read().strip().lower()
+                                if h_name in ("xe", "i915", "amdgpu") and (vendor in h_name or drv_base in h_name):
+                                    hwmon_dirs.append(h_path)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+            for h_path in hwmon_dirs:
+                if temp_c is None:
+                    for t_name in ("temp1_input", "temp2_input", "temp3_input"):
+                        t_file = os.path.join(h_path, t_name)
+                        if os.path.exists(t_file):
+                            try:
+                                with open(t_file, "r") as f:
+                                    raw_t = float(f.read().strip())
+                                if raw_t > 0:
+                                    temp_c = round(raw_t / 1000.0, 1) if raw_t > 1000 else round(raw_t, 1)
+                                    break
+                            except Exception:
+                                pass
+
+                if power_w is None:
+                    for p_name in ("power1_average", "power1_input", "power2_average", "power2_input"):
+                        p_file = os.path.join(h_path, p_name)
+                        if os.path.exists(p_file):
+                            try:
+                                with open(p_file, "r") as f:
+                                    raw_p = float(f.read().strip())
+                                if raw_p > 0:
+                                    power_w = round(raw_p / 1000000.0, 1) if raw_p > 10000 else round(raw_p, 1)
+                                    break
+                            except Exception:
+                                pass
 
             gpus.append({
                 "id": f"drm-{c}",
-                "name": vendor_names.get(vendor, f"GPU ({c})"),
+                "name": gpu_name,
                 "vendor": vendor,
-                "driver_version": "Linux DRM Kernel",
+                "driver_version": driver_name,
                 "utilization_gpu_percent": round(gpu_util, 1),
-                "memory_percent": 0.0,
-                "memory_total_bytes": 0,
-                "memory_used_bytes": 0,
+                "memory_percent": vram_pct,
+                "memory_total_bytes": vram_total,
+                "memory_used_bytes": vram_used,
                 "temperature_c": temp_c,
                 "power_watts": power_w,
                 "freq_mhz": freq_mhz,

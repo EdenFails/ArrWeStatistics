@@ -365,6 +365,8 @@ function updateServiceFormFields() {
   const urlInput = document.getElementById('svc-url');
   const nameInput = document.getElementById('svc-name');
   const apiKeyInput = document.getElementById('svc-apikey');
+  const userInput = document.getElementById('svc-user');
+  const passwordInput = document.getElementById('svc-password');
 
   const lblUrl = document.getElementById('lbl-svc-url');
 
@@ -439,8 +441,10 @@ function getServiceFormPayload() {
   const display_order = parseInt(document.getElementById('svc-order').value || '0', 10);
   const is_enabled = document.getElementById('svc-enabled').checked ? 1 : 0;
 
-  if (base_url && !base_url.startsWith('http://') && !base_url.startsWith('https://')) {
-    base_url = 'http://' + base_url;
+  if (service_type !== 'handbrake' && service_type !== 'autovideoconverter') {
+    if (base_url && !base_url.startsWith('http://') && !base_url.startsWith('https://')) {
+      base_url = 'http://' + base_url;
+    }
   }
 
   return {
@@ -576,24 +580,42 @@ async function handleAddService(e) {
 
 function renderSystemCards() {
   const container = document.getElementById('system-container');
-  if (!container || !state.systemStats) return;
+  if (!container) return;
 
   const sys = state.systemStats;
-  const summaryEl = document.getElementById('sys-host-summary');
-  if (summaryEl) {
-    summaryEl.textContent = `${sys.hostname} • ${sys.os}`;
+  if (sys) {
+    const summaryEl = document.getElementById('sys-host-summary');
+    if (summaryEl) {
+      summaryEl.textContent = `${sys.hostname} • ${sys.os}`;
+    }
   }
 
   const cardsHtml = [];
-  cardsHtml.push(UI.renderSystemCpuCard(sys));
+  if (sys) {
+    cardsHtml.push(UI.renderSystemCpuCard(sys));
 
-  if (sys.gpus && sys.gpus.length > 0) {
-    sys.gpus.forEach(g => {
-      cardsHtml.push(UI.renderSystemGpuCard(g));
+    if (sys.gpus && sys.gpus.length > 0) {
+      sys.gpus.forEach(g => {
+        cardsHtml.push(UI.renderSystemGpuCard(g));
+      });
+    }
+  }
+
+  if (state.storagePools && state.storagePools.length > 0) {
+    state.storagePools.forEach(pool => {
+      cardsHtml.push(UI.renderStorageCard(pool));
     });
   }
 
-  container.innerHTML = cardsHtml.join('');
+  if (cardsHtml.length === 0) {
+    container.innerHTML = `<div class="empty-state">No host hardware or storage pools configured.</div>`;
+  } else {
+    container.innerHTML = cardsHtml.join('');
+  }
+}
+
+function renderStorageCards() {
+  renderSystemCards();
 }
 
 // System Hardware Detail Modal Logic
@@ -677,20 +699,6 @@ async function loadStoragePools() {
     renderStorageCards();
     renderStorageTable();
   } catch (err) {}
-}
-
-function renderStorageCards() {
-  const container = document.getElementById('storage-container');
-  if (!container) return;
-
-  if (!state.storagePools || state.storagePools.length === 0) {
-    container.innerHTML = `
-      <div class="empty-state">No storage pools configured. Click "+ ADD DRIVE / POOL" to monitor your MergerFS or host drives.</div>
-    `;
-    return;
-  }
-
-  container.innerHTML = state.storagePools.map(pool => UI.renderStorageCard(pool)).join('');
 }
 
 function renderStorageTable() {

@@ -601,8 +601,13 @@ const UI = {
     let vendorTag = '[GPU]';
     let vendorColor = 'var(--accent)';
     const v = (gpu.vendor || '').toLowerCase();
+    const gName = (gpu.name || '').toLowerCase();
     if (v === 'intel') {
-      vendorTag = '[INTEL ARC]';
+      if (gName.includes('battlemage') || gName.includes('b580') || gName.includes('b570')) {
+        vendorTag = '[INTEL BATTLEMAGE]';
+      } else {
+        vendorTag = '[INTEL ARC]';
+      }
       vendorColor = '#0071c5';
     } else if (v === 'nvidia') {
       vendorTag = '[NVIDIA]';
@@ -612,7 +617,11 @@ const UI = {
       vendorColor = '#ed1c24';
     }
 
-    const tempStr = gpu.temperature_c ? `${gpu.temperature_c}°C` : (gpu.power_watts ? `${gpu.power_watts}W` : 'ONLINE');
+    const tempStr = gpu.temperature_c
+      ? `${gpu.temperature_c}°C`
+      : (gpu.power_watts
+          ? `${gpu.power_watts}W`
+          : (gpu.freq_mhz ? `${Math.round(gpu.freq_mhz)} MHz` : 'ONLINE'));
 
     return `
       <div class="card card-clickable" onclick="openSystemDetail('${esc(gpu.id)}')">
@@ -657,12 +666,19 @@ const UI = {
               <div class="stat-box-lbl">POWER DRAW</div>
               <div class="stat-box-val">${gpu.power_watts ? `${gpu.power_watts} W` : '-'}</div>
             </div>
+            ${gpu.freq_mhz ? `
+              <div class="stat-box" style="grid-column: span 2; display: flex; justify-content: space-between; align-items: center; padding: 6px 10px;">
+                <span class="stat-box-lbl" style="margin-bottom: 0;">CLOCK SPEED</span>
+                <span class="stat-box-val" style="font-size: 11px;">${Math.round(gpu.freq_mhz)} MHz</span>
+              </div>
+            ` : ''}
           </div>
           <div class="card-action-hint">CLICK TO VIEW DETAILED GPU SPECS &amp; TELEMETRY</div>
         </div>
       </div>
     `;
   },
+
 
   renderSystemDetailView(sys, targetId = 'cpu') {
     const cpu = sys.cpu || {};
@@ -758,6 +774,7 @@ const UI = {
                 <th>DRIVER</th>
                 <th>CORE USAGE</th>
                 <th>VRAM (USED / TOTAL)</th>
+                <th>CLOCK</th>
                 <th>TEMP</th>
                 <th>POWER</th>
               </tr>
@@ -771,7 +788,15 @@ const UI = {
                 else if (g.vendor === 'nvidia') vColor = '#76b900';
                 else if (g.vendor === 'amd') vColor = '#ed1c24';
 
-                const vramStr = g.memory_total_bytes > 0 ? `${fmtBytes(g.memory_used_bytes)} / ${fmtBytes(g.memory_total_bytes)} (${gMem.toFixed(0)}%)` : '-';
+                let vramStr = '-';
+                if (g.memory_total_bytes > 0) {
+                  if (g.memory_used_bytes > 0) {
+                    vramStr = `${fmtBytes(g.memory_used_bytes)} / ${fmtBytes(g.memory_total_bytes)} (${gMem.toFixed(0)}%)`;
+                  } else {
+                    vramStr = `0 B / ${fmtBytes(g.memory_total_bytes)}`;
+                  }
+                }
+                const clockStr = g.freq_mhz ? `${Math.round(g.freq_mhz)} MHz` : '-';
                 const tempStr = g.temperature_c ? `${g.temperature_c}°C` : '-';
                 const pwrStr = g.power_watts ? `${g.power_watts} W` : '-';
 
@@ -782,6 +807,7 @@ const UI = {
                     <td style="font-family: var(--font-mono); font-size: 10px; color: var(--text-dim);">${esc(g.driver_version || '-')}</td>
                     <td style="font-family: var(--font-mono); font-weight: 700; color: ${gUtil > 80 ? 'var(--status-warn)' : 'var(--text-bright)'};">${gUtil.toFixed(1)}%</td>
                     <td style="font-family: var(--font-mono); font-size: 11px;">${esc(vramStr)}</td>
+                    <td style="font-family: var(--font-mono); font-size: 11px;">${esc(clockStr)}</td>
                     <td style="font-family: var(--font-mono); font-size: 11px; color: ${g.temperature_c && g.temperature_c > 80 ? 'var(--status-warn)' : 'inherit'};">${esc(tempStr)}</td>
                     <td style="font-family: var(--font-mono); font-size: 11px;">${esc(pwrStr)}</td>
                   </tr>
