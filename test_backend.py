@@ -252,6 +252,74 @@ def run_tests():
         assert jdata["recent_requests"][1]["is_4k"] is True
         print("[+] Test 4.7.3 Passed: Jellyseerr request totals, breakdown, status, and media title resolution verified.")
 
+        # Test 4.7.3.1: Jellyseerr base_url normalization (stripping /api/v1)
+        jdata_norm = asyncio.run(pull_jellyseer(mock_jellyseer_client, {"base_url": "http://fake-jellyseer/api/v1", "apikey": "test-key"}))
+        assert jdata_norm["total_requests"] == 15
+        try:
+            asyncio.run(pull_jellyseer(mock_jellyseer_client, {"base_url": "http://fake-jellyseer", "apikey": ""}))
+            assert False, "Should have raised ValueError on missing API key"
+        except ValueError:
+            pass
+        print("[+] Test 4.7.3.1 Passed: Jellyseerr base URL normalization and API key requirement verified.")
+
+        # Test 4.7.4: HandBrake / AutoVideoConverter log monitoring
+        from clients.handbrake import parse_handbrake_log, pull_handbrake
+        import tempfile
+
+        hb_sample_log = """
+[autovideoconverter] Starting conversion queue
+[autovideoconverter] Encoding /watch/radarr/Spider-Man- Brand New Day 2026.1080p.HQ Pre.Multi.AAC 2.0.x264.mkv: task 1 of 1, 46.60 % (247.73 fps, avg 245.08 fps, ETA 00h07m26s)
+[autovideoconverter] Encoding /watch/radarr/Spider-Man- Brand New Day 2026.1080p.HQ Pre.Multi.AAC 2.0.x264.mkv: task 1 of 1, 54.23 % (234.64 fps, avg 244.50 fps, ETA 00h06m23s)
+"""
+        hb_parsed = parse_handbrake_log(hb_sample_log)
+        assert hb_parsed["is_encoding"] is True
+        assert hb_parsed["state"] == "encoding"
+        job = hb_parsed["current_job"]
+        assert job is not None
+        assert job["progress_percent"] == 54.23
+        assert job["fps"] == 234.64
+        assert job["avg_fps"] == 244.50
+        assert job["eta"] == "00h06m23s"
+        assert job["eta_formatted"] == "6m 23s"
+        assert job["category"] == "radarr"
+        assert "Spider-Man" in job["filename"]
+        assert job["task_current"] == 1 and job["task_total"] == 1
+
+        # Test file-based pull_handbrake
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False, encoding="utf-8") as tf:
+            tf.write(hb_sample_log)
+            temp_log_path = tf.name
+
+        try:
+            hb_file_res = asyncio.run(pull_handbrake(mock_jellyseer_client, {"base_url": temp_log_path}))
+            assert hb_file_res["is_encoding"] is True
+            assert hb_file_res["current_job"]["progress_percent"] == 54.23
+            assert hb_file_res["is_http"] is False
+        finally:
+            if os.path.exists(temp_log_path):
+                os.remove(temp_log_path)
+
+        # Test idle state
+        hb_idle_log = "[autovideoconverter] Watching for files in /watch\n[autovideoconverter] No files to convert"
+        hb_idle_parsed = parse_handbrake_log(hb_idle_log)
+        assert hb_idle_parsed["is_encoding"] is False
+        assert hb_idle_parsed["state"] == "idle"
+        print("[+] Test 4.7.4 Passed: HandBrake and AutoVideoConverter log parsing verified.")
+
+        # Test 4.7.5: Register HandBrake service with file path
+        hb_svc_res = client.post(
+            "/api/services",
+            json={
+                "name": "Local HandBrake",
+                "service_type": "handbrake",
+                "base_url": "/watch/autovideoconverter.log",
+                "display_order": 5,
+            },
+            headers=headers,
+        )
+        assert hb_svc_res.status_code == 201, f"Failed to register HandBrake service: {hb_svc_res.text}"
+        print("[+] Test 4.7.5 Passed: HandBrake service creation with file path verified.")
+
         telemetry_res = client.get("/api/telemetry", headers=headers)
         assert telemetry_res.status_code == 200, f"Telemetry failed: {telemetry_res.text}"
         data = telemetry_res.json()

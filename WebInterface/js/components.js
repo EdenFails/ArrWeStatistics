@@ -66,6 +66,10 @@ const UI = {
         case 'jellyseerr':
           bodyHtml = this.jellyseerr(item.data);
           break;
+        case 'handbrake':
+        case 'autovideoconverter':
+          bodyHtml = this.handbrake(item.data);
+          break;
         default:
           bodyHtml = `<div>Unsupported type</div>`;
       }
@@ -319,6 +323,96 @@ const UI = {
         ${d.open_issues ? `<span>|</span><span style="color: var(--status-warn);">Open Issues: <strong>${d.open_issues}</strong></span>` : ''}
       </div>
       ${listHtml}
+    `;
+  },
+
+  handbrake(d = {}) {
+    const isEnc = Boolean(d.is_encoding && d.current_job);
+    const job = d.current_job || {};
+    const recent = d.recent_completed || [];
+
+    let currentJobHtml = '';
+
+    if (isEnc) {
+      const prog = Math.min(Math.max(job.progress_percent || 0, 0), 100);
+      const catBadge = job.category ? `<span class="badge" style="font-size: 9px; margin-left: 6px; padding: 2px 6px; background: rgba(56, 189, 248, 0.15); color: var(--accent);">${esc(job.category.toUpperCase())}</span>` : '';
+
+      currentJobHtml = `
+        <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-dim); border-radius: var(--radius-sm); padding: 10px; margin-bottom: 12px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <div style="font-size: 11px; font-weight: 600; color: var(--text-bright); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 80%;" title="${esc(job.filename)}">
+              ${esc(job.title || job.filename)}${catBadge}
+            </div>
+            <div style="font-family: var(--font-mono); font-size: 10px; color: var(--accent); font-weight: 700;">
+              ${prog.toFixed(1)}%
+            </div>
+          </div>
+          <div class="progress-track" style="height: 6px; margin-bottom: 8px;">
+            <div class="progress-fill" style="width: ${prog}%; background: var(--accent);"></div>
+          </div>
+          <div style="display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 10px; color: var(--text-dim);">
+            <span>Task ${job.task_current} of ${job.task_total}</span>
+            <span>${job.fps ? `${job.fps.toFixed(0)} FPS` : ''}${job.avg_fps ? ` (avg ${job.avg_fps.toFixed(0)})` : ''}</span>
+            <span>ETA: ${esc(job.eta_formatted || job.eta || '-')}</span>
+          </div>
+        </div>
+      `;
+    } else {
+      currentJobHtml = `
+        <div style="background: rgba(255, 255, 255, 0.02); border: 1px dashed var(--border-dim); border-radius: var(--radius-sm); padding: 12px; margin-bottom: 12px; text-align: center;">
+          <div style="font-family: var(--font-mono); font-size: 11px; color: var(--status-online); font-weight: 600; margin-bottom: 2px;">
+            ${esc(d.state_label || 'IDLE / WAITING')}
+          </div>
+          <div style="font-size: 10px; color: var(--text-dim);">
+            ${recent.length > 0 ? `Last completed: ${esc(recent[0].title || recent[0].filename)}` : 'Watching folder for incoming media'}
+          </div>
+        </div>
+      `;
+    }
+
+    let recentHtml = '';
+    if (recent.length > 0) {
+      recentHtml = `
+        <div class="card-list-title">RECENT CONVERSIONS (${recent.length})</div>
+        <div class="card-items-list">
+          ${recent.slice(0, 4).map(r => `
+            <div class="card-item-row">
+              <div class="item-row-top">
+                <span class="item-row-name" title="${esc(r.filename)}">${esc(r.title || r.filename)}</span>
+                <span class="item-row-meta" style="color: var(--status-online); font-weight: 600;">DONE</span>
+              </div>
+              <div class="item-row-top" style="margin-top: 2px;">
+                <span class="item-row-meta">${esc((r.category || 'media').toUpperCase())}</span>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    return `
+      ${currentJobHtml}
+      <div class="stat-grid-2">
+        <div class="stat-box">
+          <div class="stat-box-lbl">STATE</div>
+          <div class="stat-box-val" style="color: ${isEnc ? 'var(--accent)' : 'var(--status-online)'}; font-size: 12px;">
+            ${isEnc ? 'ENCODING' : 'IDLE'}
+          </div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-box-lbl">CURRENT SPEED</div>
+          <div class="stat-box-val">${isEnc && job.fps ? `${job.fps.toFixed(0)} FPS` : '0 FPS'}</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-box-lbl">TOTAL COMPLETED</div>
+          <div class="stat-box-val">${recent.length}</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-box-lbl">SOURCE TYPE</div>
+          <div class="stat-box-val" style="font-size: 11px;">${d.is_http ? 'HTTP STREAM' : 'LOCAL LOG'}</div>
+        </div>
+      </div>
+      ${recentHtml}
     `;
   },
 
@@ -874,6 +968,123 @@ const UI = {
               }).join('')}
             </tbody>
           </table>
+        </div>
+      `;
+    }
+
+    if (type === 'handbrake' || type === 'autovideoconverter') {
+      const job = d.current_job;
+      const recent = d.recent_completed || [];
+      const logTail = d.log_tail || [];
+      const search = (state.detailSearch || '').toLowerCase().trim();
+
+      const filteredRecent = recent.filter(r => {
+        if (!search) return true;
+        return (r.title || '').toLowerCase().includes(search) || (r.filename || '').toLowerCase().includes(search) || (r.category || '').toLowerCase().includes(search);
+      });
+
+      const filteredLog = logTail.filter(line => {
+        if (!search) return true;
+        return line.toLowerCase().includes(search);
+      });
+
+      let currentJobCard = '';
+      if (job) {
+        const prog = Math.min(Math.max(job.progress_percent || 0, 0), 100);
+        currentJobCard = `
+          <div style="background: rgba(56, 189, 248, 0.05); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: var(--radius-sm); padding: 16px; margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
+              <div>
+                <div style="font-size: 10px; font-family: var(--font-mono); color: var(--accent); letter-spacing: 1px; margin-bottom: 4px;">ACTIVE TRANSCODE JOB</div>
+                <div style="font-size: 14px; font-weight: 700; color: var(--text-bright);">${esc(job.title || job.filename)}</div>
+                <div style="font-size: 10px; font-family: var(--font-mono); color: var(--text-dim); margin-top: 2px;">${esc(job.file_path)}</div>
+              </div>
+              <div style="text-align: right;">
+                <div style="font-size: 20px; font-family: var(--font-mono); font-weight: 800; color: var(--accent);">${prog.toFixed(1)}%</div>
+                <div style="font-size: 10px; font-family: var(--font-mono); color: var(--text-dim);">Task ${job.task_current} of ${job.task_total}</div>
+              </div>
+            </div>
+
+            <div class="progress-track" style="height: 10px; margin: 12px 0;">
+              <div class="progress-fill" style="width: ${prog}%; background: var(--accent);"></div>
+            </div>
+
+            <div class="stat-grid-2" style="margin-top: 12px;">
+              <div class="stat-box">
+                <div class="stat-box-lbl">ENCODING SPEED</div>
+                <div class="stat-box-val">${job.fps ? `${job.fps.toFixed(1)} FPS` : '-'}</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-box-lbl">AVERAGE SPEED</div>
+                <div class="stat-box-val">${job.avg_fps ? `${job.avg_fps.toFixed(1)} FPS` : '-'}</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-box-lbl">ESTIMATED TIME (ETA)</div>
+                <div class="stat-box-val" style="color: var(--accent);">${esc(job.eta_formatted || job.eta || '-')}</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-box-lbl">TARGET CATEGORY</div>
+                <div class="stat-box-val" style="text-transform: uppercase;">${esc(job.category || 'General')}</div>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      return `
+        ${currentJobCard}
+        <div class="stat-grid-2" style="margin-bottom: 16px;">
+          <div class="stat-box">
+            <div class="stat-box-lbl">CONVERTER STATE</div>
+            <div class="stat-box-val" style="color: ${job ? 'var(--accent)' : 'var(--status-online)'};">${esc(d.state_label || 'IDLE')}</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-box-lbl">TARGET LOG SOURCE</div>
+            <div class="stat-box-val" style="font-size: 11px; word-break: break-all;">${esc(d.target || '-')}</div>
+          </div>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <div class="section-title" style="margin: 0;">LOG ACTIVITY &amp; RECENT CONVERSIONS</div>
+          <div style="width: 240px;">
+            <input type="text" id="detail-search-input" class="input-text" style="width: 100%; padding: 4px 8px; font-size: 11px;" placeholder="Search log or conversions..." value="${esc(search)}" oninput="handleDetailSearch(this.value)">
+          </div>
+        </div>
+
+        ${filteredRecent.length > 0 ? `
+          <div class="section-title" style="font-size: 11px; margin-bottom: 6px;">RECENT COMPLETED (${filteredRecent.length})</div>
+          <div style="overflow-x: auto; margin-bottom: 16px; border: 1px solid var(--border-dim);">
+            <table class="detail-table">
+              <thead>
+                <tr>
+                  <th>MEDIA FILENAME</th>
+                  <th>CATEGORY</th>
+                  <th>STATUS</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${filteredRecent.map(r => `
+                  <tr>
+                    <td style="font-weight: 600; color: var(--text-bright);">${esc(r.title || r.filename)}</td>
+                    <td style="font-family: var(--font-mono); text-transform: uppercase; font-size: 10px; color: var(--accent);">${esc(r.category || '-')}</td>
+                    <td style="font-family: var(--font-mono); font-size: 11px; color: var(--status-online); font-weight: 600;">Completed</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : ''}
+
+        <div class="section-title" style="font-size: 11px; margin-bottom: 6px;">LIVE LOG TAIL (LAST ${filteredLog.length} LINES)</div>
+        <div style="background: #090d13; border: 1px solid var(--border-dim); border-radius: var(--radius-sm); padding: 12px; font-family: var(--font-mono); font-size: 11px; line-height: 1.6; max-height: 350px; overflow-y: auto; color: #94a3b8; white-space: pre-wrap; word-break: break-all;">
+          ${filteredLog.length === 0 ? 'No log lines available.' : filteredLog.map(l => {
+            let color = '#94a3b8';
+            const low = l.toLowerCase();
+            if (low.includes('encoding')) color = '#38bdf8';
+            else if (low.includes('finished') || low.includes('completed') || low.includes('done') || low.includes('rip done')) color = '#34d399';
+            else if (low.includes('error') || low.includes('fail')) color = '#f87171';
+            return `<div style="color: ${color};">${esc(l)}</div>`;
+          }).join('')}
         </div>
       `;
     }

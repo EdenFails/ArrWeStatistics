@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request, Response, Depends, HTTPException, status, 
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ValidationInfo
 import httpx
 import json
 
@@ -106,15 +106,21 @@ class ServiceInput(BaseModel):
     @classmethod
     def check_type(cls, val: str) -> str:
         s = val.strip().lower()
-        valid = {"qbittorrent", "sabnzbd", "jellyfin", "jellyseer", "jellyseerr"}
+        valid = {"qbittorrent", "sabnzbd", "jellyfin", "jellyseer", "jellyseerr", "handbrake", "autovideoconverter"}
         if s not in valid:
             raise ValueError(f"service_type must be in {valid}")
         return s
 
     @field_validator("base_url")
     @classmethod
-    def check_url(cls, val: str) -> str:
+    def check_url(cls, val: str, info: ValidationInfo) -> str:
         s = val.strip()
+        stype = (info.data.get("service_type") or "").strip().lower() if info.data else ""
+        if stype in ("handbrake", "autovideoconverter"):
+            if s.startswith("http://") or s.startswith("https://") or s.startswith("file://") or s.startswith("/") or s.startswith("\\") or (len(s) > 2 and s[1] == ":" and (s[2] == "\\" or s[2] == "/")):
+                return s.rstrip("/") if (s.startswith("http://") or s.startswith("https://")) else s
+            raise ValueError("For HandBrake, base_url must be an absolute log file path or HTTP(S) URL")
+
         if not re.match(r"^https?://[a-zA-Z0-9\.\-_:]+(/[a-zA-Z0-9\.\-_]*)*$", s):
             raise ValueError("base_url must be a valid HTTP or HTTPS URL")
         return s.rstrip("/")

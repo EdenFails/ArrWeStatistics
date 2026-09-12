@@ -7,6 +7,7 @@ from .qbittorrent import pull_qbittorrent
 from .sabnzbd import pull_sabnzbd
 from .jellyfin import pull_jellyfin
 from .jellyseer import pull_jellyseer
+from .handbrake import pull_handbrake
 
 ADAPTERS: dict[str, Callable[[httpx.AsyncClient, dict], Awaitable[dict]]] = {
     "qbittorrent": pull_qbittorrent,
@@ -14,6 +15,8 @@ ADAPTERS: dict[str, Callable[[httpx.AsyncClient, dict], Awaitable[dict]]] = {
     "jellyfin": pull_jellyfin,
     "jellyseer": pull_jellyseer,
     "jellyseerr": pull_jellyseer,
+    "handbrake": pull_handbrake,
+    "autovideoconverter": pull_handbrake,
 }
 
 
@@ -73,6 +76,19 @@ async def fetch_service_data(client: httpx.AsyncClient, svc: dict) -> dict:
         ms = int((time.perf_counter() - t0) * 1000)
         code = e.response.status_code
         err_msg = f"HTTP {code}"
+
+        server_detail = ""
+        try:
+            body = e.response.json()
+            if isinstance(body, dict):
+                server_detail = body.get("message") or body.get("error") or body.get("detail") or ""
+            elif isinstance(body, str):
+                server_detail = body
+        except Exception:
+            txt = e.response.text.strip()
+            if txt and len(txt) < 150 and not txt.startswith("<"):
+                server_detail = txt
+
         if code in (401, 403):
             if stype == "jellyfin":
                 err_msg = f"Jellyfin returned HTTP {code}: Invalid API key or credentials. Generate an API Key in Jellyfin Dashboard > Advanced > API Keys, or enter Username & Password."
@@ -82,6 +98,15 @@ async def fetch_service_data(client: httpx.AsyncClient, svc: dict) -> dict:
                 err_msg = f"qBittorrent returned HTTP {code}: Invalid Username or Password."
             elif stype in ("jellyseer", "jellyseerr"):
                 err_msg = f"Jellyseerr returned HTTP {code}: Invalid API Key. Check Settings > General in Jellyseerr."
+        elif code == 400:
+            if stype in ("jellyseer", "jellyseerr"):
+                extra = f": {server_detail}" if server_detail else ""
+                err_msg = f"Jellyseerr returned HTTP 400 (Bad Request){extra}. Ensure Base URL is formatted as http://HOST:PORT (e.g. http://192.168.1.50:5055) without /api/v1."
+            elif server_detail:
+                err_msg = f"HTTP {code}: {server_detail}"
+        elif server_detail:
+            err_msg = f"HTTP {code}: {server_detail}"
+
         return {
             "service_id": sid,
             "name": name,

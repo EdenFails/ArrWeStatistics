@@ -357,8 +357,19 @@ function updateServiceFormFields() {
   const nameInput = document.getElementById('svc-name');
   const apiKeyInput = document.getElementById('svc-apikey');
 
-  const userInput = document.getElementById('svc-user');
-  const passwordInput = document.getElementById('svc-password');
+  const lblUrl = document.getElementById('lbl-svc-url');
+
+  if (stype === 'handbrake' || stype === 'autovideoconverter') {
+    if (grpAuth) grpAuth.classList.add('hidden');
+    if (grpApikey) grpApikey.classList.add('hidden');
+    if (lblUrl) lblUrl.textContent = 'LOG FILE PATH OR URL';
+    if (urlInput && (!urlInput.value || urlInput.value.includes('http://gluetun') || urlInput.value.includes('host.docker.internal'))) {
+      urlInput.placeholder = '/watch/autovideoconverter.log or http://IP:PORT/log';
+    }
+    if (nameInput && !nameInput.value) nameInput.placeholder = 'HandBrake Transcoder';
+  } else {
+    if (lblUrl) lblUrl.textContent = 'BASE URL';
+  }
 
   if (stype === 'qbittorrent') {
     if (grpApikey) grpApikey.classList.remove('hidden');
@@ -382,7 +393,7 @@ function updateServiceFormFields() {
       urlInput.placeholder = 'http://host.docker.internal:8096 or LAN IP';
     }
     if (nameInput && !nameInput.value) nameInput.placeholder = 'Home Jellyfin';
-  } else {
+  } else if (stype !== 'handbrake' && stype !== 'autovideoconverter') {
     if (grpAuth) grpAuth.classList.add('hidden');
     if (grpApikey) grpApikey.classList.remove('hidden');
     if (apiKeyInput) apiKeyInput.placeholder = 'Service API key / token';

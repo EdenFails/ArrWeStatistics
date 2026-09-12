@@ -5,25 +5,31 @@ _jellyseerr_media_cache: dict[str, dict] = {}
 
 
 async def pull_jellyseer(client: httpx.AsyncClient, svc: dict) -> dict:
-    url = svc["base_url"].rstrip("/")
+    raw_url = (svc.get("base_url") or "").strip().rstrip("/")
+    if raw_url.endswith("/api/v1"):
+        url = raw_url[:-7].rstrip("/")
+    else:
+        url = raw_url
+
     key = (svc.get("apikey") or "").strip()
+    if not key:
+        raise ValueError("Jellyseerr API Key is required. Retrieve it from Jellyseerr Settings > General.")
 
     hdrs = {
         "User-Agent": "ArrWeStatistics/1.0",
         "X-Api-Key": key,
         "Accept": "application/json",
     }
-    params = {"apiKey": key}
 
     # 1. Fetch Request Counts
-    r_cnt = await client.get(f"{url}/api/v1/request/count", headers=hdrs, params=params, timeout=5.0)
+    r_cnt = await client.get(f"{url}/api/v1/request/count", headers=hdrs, timeout=5.0)
     r_cnt.raise_for_status()
     counts = r_cnt.json()
 
     # 2. Fetch Server Status (version, etc.)
     status_info = {}
     try:
-        r_stat = await client.get(f"{url}/api/v1/status", headers=hdrs, params=params, timeout=3.0)
+        r_stat = await client.get(f"{url}/api/v1/status", headers=hdrs, timeout=3.0)
         if r_stat.status_code == 200:
             status_info = r_stat.json()
     except Exception:
@@ -32,7 +38,7 @@ async def pull_jellyseer(client: httpx.AsyncClient, svc: dict) -> dict:
     # 3. Fetch Issue Counts
     issue_counts = {}
     try:
-        r_iss = await client.get(f"{url}/api/v1/issue/count", headers=hdrs, params=params, timeout=3.0)
+        r_iss = await client.get(f"{url}/api/v1/issue/count", headers=hdrs, timeout=3.0)
         if r_iss.status_code == 200:
             issue_counts = r_iss.json()
     except Exception:
@@ -44,7 +50,7 @@ async def pull_jellyseer(client: httpx.AsyncClient, svc: dict) -> dict:
         r_list = await client.get(
             f"{url}/api/v1/request",
             headers=hdrs,
-            params={**params, "take": 20, "skip": 0, "filter": "all", "sort": "added"},
+            params={"take": 20, "skip": 0, "filter": "all", "sort": "added"},
             timeout=5.0,
         )
         if r_list.status_code == 200:
@@ -76,7 +82,7 @@ async def pull_jellyseer(client: httpx.AsyncClient, svc: dict) -> dict:
 
                 try:
                     endpoint = f"{url}/api/v1/{m_type}/{tmdb_id}"
-                    r_m = await client.get(endpoint, headers=hdrs, params=params, timeout=3.0)
+                    r_m = await client.get(endpoint, headers=hdrs, timeout=3.0)
                     if r_m.status_code == 200:
                         m_data = r_m.json()
                         resolved_title = m_data.get("title") or m_data.get("name") or f"{m_type.capitalize()} #{tmdb_id}"
