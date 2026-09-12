@@ -7,7 +7,14 @@ DB_PATH = os.getenv("DB_PATH", "data/arrwestatistics.db")
 def get_conn() -> sqlite3.Connection:
     folder = os.path.dirname(DB_PATH)
     if folder:
-        os.makedirs(folder, exist_ok=True)
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except Exception:
+            pass
+        try:
+            os.chmod(folder, 0o777)
+        except Exception:
+            pass
 
     conn = sqlite3.connect(DB_PATH, timeout=10.0)
     conn.row_factory = sqlite3.Row

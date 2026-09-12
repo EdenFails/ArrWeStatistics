@@ -24,16 +24,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl && \
-    rm -rf /var/lib/apt/lists/* && \
-    groupadd -g 10001 appgroup && \
-    useradd -u 10001 -g appgroup -s /bin/sh -d /app appuser
+    rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /install /usr/local
 COPY . /app
 
-RUN mkdir -p /app/data && chown -R appuser:appgroup /app
-
-USER appuser
+RUN mkdir -p /app/data && chmod -R 777 /app/data
 
 EXPOSE 8478
 
