@@ -78,6 +78,19 @@
       </div>
 
       <main class="dashboard-body">
+        <div class="system-section" id="section-system" style="margin-bottom: 24px;">
+          <div class="section-title" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <span>HOST SYSTEM &amp; HARDWARE</span>
+            <span id="sys-host-summary" style="font-size: 10px; font-family: var(--font-mono); color: var(--text-dim);"></span>
+          </div>
+          <div id="system-container" class="cards-grid">
+            <!-- CPU/RAM & GPU Cards rendered dynamically -->
+          </div>
+        </div>
+
+        <div class="section-title" style="margin-bottom: 12px;">
+          <span>SERVICES &amp; TARGETS</span>
+        </div>
         <div id="cards-container" class="cards-grid">
           <div class="empty-state">No services registered or active. Open Services menu to configure targets.</div>
         </div>

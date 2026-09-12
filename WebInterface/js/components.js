@@ -525,6 +525,275 @@ const UI = {
     `;
   },
 
+  renderSystemCpuCard(sys) {
+    const cpu = sys.cpu || {};
+    const ram = sys.ram || {};
+    const cpuPct = Math.min(Math.max(cpu.percent || 0, 0), 100);
+    const ramPct = Math.min(Math.max(ram.percent || 0, 0), 100);
+
+    let cpuFillClass = '';
+    if (cpuPct > 90) cpuFillClass = 'danger';
+    else if (cpuPct > 75) cpuFillClass = 'warn';
+
+    let ramFillClass = 'storage';
+    if (ramPct > 90) ramFillClass = 'danger';
+    else if (ramPct > 75) ramFillClass = 'warn';
+
+    const freqStr = cpu.freq_mhz ? `${(cpu.freq_mhz / 1000).toFixed(1)} GHz` : '';
+    const coresStr = `${cpu.count_physical || 0}C / ${cpu.count_logical || 0}T`;
+    const tempStr = cpu.temp_c ? ` • ${cpu.temp_c}°C` : '';
+    const badgeText = `${freqStr ? `${freqStr} • ` : ''}${coresStr}${tempStr}`;
+
+    return `
+      <div class="card card-clickable" onclick="openSystemDetail('cpu')">
+        <div class="card-header">
+          <div class="card-title" title="${esc(cpu.brand || 'Host Processor')}">
+            ${esc(cpu.brand || 'Host Processor')}
+            <span class="card-type">[CPU / RAM]</span>
+          </div>
+          <div class="card-status-badge badge-online">${esc(badgeText)}</div>
+        </div>
+        <div class="card-body">
+          <div style="margin-bottom: 12px;">
+            <div style="display: flex; justify-content: space-between; font-size: 10px; font-family: var(--font-mono); color: var(--text-dim); margin-bottom: 4px;">
+              <span>CPU UTILIZATION</span>
+              <span style="color: ${cpuPct > 80 ? 'var(--status-warn)' : 'var(--text-bright)'}; font-weight: 700;">${cpuPct.toFixed(1)}%</span>
+            </div>
+            <div class="progress-track" style="height: 6px;">
+              <div class="progress-fill ${cpuFillClass}" style="width: ${cpuPct}%;"></div>
+            </div>
+          </div>
+
+          <div style="margin-bottom: 12px;">
+            <div style="display: flex; justify-content: space-between; font-size: 10px; font-family: var(--font-mono); color: var(--text-dim); margin-bottom: 4px;">
+              <span>MEMORY (${fmtBytes(ram.used_bytes)} / ${fmtBytes(ram.total_bytes)})</span>
+              <span style="color: ${ramPct > 80 ? 'var(--status-warn)' : 'var(--text-bright)'}; font-weight: 700;">${ramPct.toFixed(1)}%</span>
+            </div>
+            <div class="progress-track" style="height: 6px;">
+              <div class="progress-fill ${ramFillClass}" style="width: ${ramPct}%;"></div>
+            </div>
+          </div>
+
+          <div class="stat-grid-2">
+            <div class="stat-box">
+              <div class="stat-box-lbl">AVAILABLE RAM</div>
+              <div class="stat-box-val">${fmtBytes(ram.free_bytes)}</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-box-lbl">SYSTEM UPTIME</div>
+              <div class="stat-box-val" style="font-size: 11px;">${fmtSeconds(sys.uptime_seconds)}</div>
+            </div>
+          </div>
+          <div class="card-action-hint">CLICK TO VIEW PER-CORE METRICS &amp; MEMORY</div>
+        </div>
+      </div>
+    `;
+  },
+
+  renderSystemGpuCard(gpu) {
+    const gpuPct = Math.min(Math.max(gpu.utilization_gpu_percent || 0, 0), 100);
+    const vramPct = Math.min(Math.max(gpu.memory_percent || 0, 0), 100);
+
+    let gpuFillClass = '';
+    if (gpuPct > 90) gpuFillClass = 'danger';
+    else if (gpuPct > 75) gpuFillClass = 'warn';
+
+    let vendorTag = '[GPU]';
+    let vendorColor = 'var(--accent)';
+    const v = (gpu.vendor || '').toLowerCase();
+    if (v === 'intel') {
+      vendorTag = '[INTEL ARC]';
+      vendorColor = '#0071c5';
+    } else if (v === 'nvidia') {
+      vendorTag = '[NVIDIA]';
+      vendorColor = '#76b900';
+    } else if (v === 'amd') {
+      vendorTag = '[AMD RADEON]';
+      vendorColor = '#ed1c24';
+    }
+
+    const tempStr = gpu.temperature_c ? `${gpu.temperature_c}°C` : (gpu.power_watts ? `${gpu.power_watts}W` : 'ONLINE');
+
+    return `
+      <div class="card card-clickable" onclick="openSystemDetail('${esc(gpu.id)}')">
+        <div class="card-header">
+          <div class="card-title" title="${esc(gpu.name)}">
+            ${esc(gpu.name)}
+            <span class="card-type" style="color: ${vendorColor};">${vendorTag}</span>
+          </div>
+          <div class="card-status-badge badge-online">${esc(tempStr)}</div>
+        </div>
+        <div class="card-body">
+          <div style="margin-bottom: 12px;">
+            <div style="display: flex; justify-content: space-between; font-size: 10px; font-family: var(--font-mono); color: var(--text-dim); margin-bottom: 4px;">
+              <span>GPU CORE UTILIZATION</span>
+              <span style="color: ${gpuPct > 80 ? 'var(--status-warn)' : 'var(--text-bright)'}; font-weight: 700;">${gpuPct.toFixed(1)}%</span>
+            </div>
+            <div class="progress-track" style="height: 6px;">
+              <div class="progress-fill ${gpuFillClass}" style="width: ${gpuPct}%;"></div>
+            </div>
+          </div>
+
+          ${gpu.memory_total_bytes > 0 ? `
+            <div style="margin-bottom: 12px;">
+              <div style="display: flex; justify-content: space-between; font-size: 10px; font-family: var(--font-mono); color: var(--text-dim); margin-bottom: 4px;">
+                <span>VRAM (${fmtBytes(gpu.memory_used_bytes)} / ${fmtBytes(gpu.memory_total_bytes)})</span>
+                <span style="font-weight: 700;">${vramPct.toFixed(1)}%</span>
+              </div>
+              <div class="progress-track" style="height: 6px;">
+                <div class="progress-fill storage" style="width: ${vramPct}%;"></div>
+              </div>
+            </div>
+          ` : ''}
+
+          <div class="stat-grid-2">
+            <div class="stat-box">
+              <div class="stat-box-lbl">TEMPERATURE</div>
+              <div class="stat-box-val" style="color: ${gpu.temperature_c && gpu.temperature_c > 80 ? 'var(--status-warn)' : 'inherit'};">
+                ${gpu.temperature_c ? `${gpu.temperature_c}°C` : '-'}
+              </div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-box-lbl">POWER DRAW</div>
+              <div class="stat-box-val">${gpu.power_watts ? `${gpu.power_watts} W` : '-'}</div>
+            </div>
+          </div>
+          <div class="card-action-hint">CLICK TO VIEW DETAILED GPU SPECS &amp; TELEMETRY</div>
+        </div>
+      </div>
+    `;
+  },
+
+  renderSystemDetailView(sys, targetId = 'cpu') {
+    const cpu = sys.cpu || {};
+    const ram = sys.ram || {};
+    const gpus = sys.gpus || [];
+
+    const cpuPct = Math.min(Math.max(cpu.percent || 0, 0), 100);
+    const ramPct = Math.min(Math.max(ram.percent || 0, 0), 100);
+
+    const freqStr = cpu.freq_mhz ? `${(cpu.freq_mhz / 1000).toFixed(2)} GHz` : '-';
+    const tempStr = cpu.temp_c ? `${cpu.temp_c}°C` : '-';
+
+    const coresList = cpu.cores || [];
+
+    return `
+      <div class="stat-grid-2" style="margin-bottom: 16px;">
+        <div class="stat-box">
+          <div class="stat-box-lbl">HOST OPERATING SYSTEM</div>
+          <div class="stat-box-val" style="font-size: 11px;">${esc(sys.os || '-')} (${esc(sys.hostname || 'Server')})</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-box-lbl">SYSTEM UPTIME</div>
+          <div class="stat-box-val" style="font-size: 11px;">${fmtSeconds(sys.uptime_seconds)}</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-box-lbl">CPU OVERALL LOAD</div>
+          <div class="stat-box-val" style="color: ${cpuPct > 80 ? 'var(--status-warn)' : 'inherit'};">${cpuPct.toFixed(1)}%</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-box-lbl">CPU CLOCK / TEMP</div>
+          <div class="stat-box-val" style="font-size: 11px;">${esc(freqStr)} / ${esc(tempStr)}</div>
+        </div>
+      </div>
+
+      <div class="section-title" style="margin-bottom: 6px;">CPU ARCHITECTURE &amp; PER-CORE UTILIZATION (${coresList.length} LOGICAL THREADS)</div>
+      <div class="core-grid" style="margin-bottom: 18px;">
+        ${coresList.map((cp, idx) => {
+          const cPct = Math.min(Math.max(cp || 0, 0), 100);
+          let fillClass = '';
+          if (cPct > 85) fillClass = 'danger';
+          else if (cPct > 70) fillClass = 'warn';
+          return `
+            <div class="core-box">
+              <div class="core-box-top">
+                <span>CORE ${idx}</span>
+                <span style="font-weight: 700;">${cPct.toFixed(0)}%</span>
+              </div>
+              <div class="progress-track" style="height: 4px;">
+                <div class="progress-fill ${fillClass}" style="width: ${cPct}%;"></div>
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+
+      <div class="section-title" style="margin-bottom: 6px;">MEMORY &amp; SWAP ALLOCATION</div>
+      <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-dim); border-radius: var(--radius-sm); padding: 12px; margin-bottom: 18px;">
+        <div style="margin-bottom: 12px;">
+          <div style="display: flex; justify-content: space-between; font-size: 10px; font-family: var(--font-mono); color: var(--text-dim); margin-bottom: 4px;">
+            <span>PHYSICAL RAM (${fmtBytes(ram.used_bytes)} USED / ${fmtBytes(ram.total_bytes)} TOTAL)</span>
+            <span style="font-weight: 700;">${ramPct.toFixed(1)}%</span>
+          </div>
+          <div class="progress-track" style="height: 6px;">
+            <div class="progress-fill storage" style="width: ${ramPct}%;"></div>
+          </div>
+        </div>
+
+        ${ram.swap_total_bytes > 0 ? `
+          <div>
+            <div style="display: flex; justify-content: space-between; font-size: 10px; font-family: var(--font-mono); color: var(--text-dim); margin-bottom: 4px;">
+              <span>SWAP / PAGEFILE (${fmtBytes(ram.swap_used_bytes)} USED / ${fmtBytes(ram.swap_total_bytes)} TOTAL)</span>
+              <span style="font-weight: 700;">${(ram.swap_percent || 0).toFixed(1)}%</span>
+            </div>
+            <div class="progress-track" style="height: 6px;">
+              <div class="progress-fill warn" style="width: ${Math.min(ram.swap_percent || 0, 100)}%;"></div>
+            </div>
+          </div>
+        ` : ''}
+      </div>
+
+      <div class="section-title" style="margin-bottom: 8px;">GRAPHICS HARDWARE (${gpus.length} DETECTED)</div>
+      ${gpus.length === 0 ? `
+        <div style="font-size: 11px; color: var(--text-dim); font-family: var(--font-mono); padding: 12px; border: 1px dashed var(--border-dim);">
+          No dedicated graphics adapters detected on host server.
+        </div>
+      ` : `
+        <div style="overflow-x: auto; border: 1px solid var(--border-dim);">
+          <table class="detail-table">
+            <thead>
+              <tr>
+                <th>GPU NAME</th>
+                <th>VENDOR</th>
+                <th>DRIVER</th>
+                <th>CORE USAGE</th>
+                <th>VRAM (USED / TOTAL)</th>
+                <th>TEMP</th>
+                <th>POWER</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${gpus.map(g => {
+                const gUtil = Math.min(Math.max(g.utilization_gpu_percent || 0, 0), 100);
+                const gMem = Math.min(Math.max(g.memory_percent || 0, 0), 100);
+                let vColor = 'var(--accent)';
+                if (g.vendor === 'intel') vColor = '#0071c5';
+                else if (g.vendor === 'nvidia') vColor = '#76b900';
+                else if (g.vendor === 'amd') vColor = '#ed1c24';
+
+                const vramStr = g.memory_total_bytes > 0 ? `${fmtBytes(g.memory_used_bytes)} / ${fmtBytes(g.memory_total_bytes)} (${gMem.toFixed(0)}%)` : '-';
+                const tempStr = g.temperature_c ? `${g.temperature_c}°C` : '-';
+                const pwrStr = g.power_watts ? `${g.power_watts} W` : '-';
+
+                return `
+                  <tr>
+                    <td style="font-weight: 600; color: var(--text-bright);">${esc(g.name)}</td>
+                    <td style="font-family: var(--font-mono); font-size: 10px; font-weight: 700; color: ${vColor}; text-transform: uppercase;">${esc(g.vendor)}</td>
+                    <td style="font-family: var(--font-mono); font-size: 10px; color: var(--text-dim);">${esc(g.driver_version || '-')}</td>
+                    <td style="font-family: var(--font-mono); font-weight: 700; color: ${gUtil > 80 ? 'var(--status-warn)' : 'var(--text-bright)'};">${gUtil.toFixed(1)}%</td>
+                    <td style="font-family: var(--font-mono); font-size: 11px;">${esc(vramStr)}</td>
+                    <td style="font-family: var(--font-mono); font-size: 11px; color: ${g.temperature_c && g.temperature_c > 80 ? 'var(--status-warn)' : 'inherit'};">${esc(tempStr)}</td>
+                    <td style="font-family: var(--font-mono); font-size: 11px;">${esc(pwrStr)}</td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      `}
+    `;
+  },
+
   renderDetailView(item, filter = 'all', searchQuery = '') {
     const type = (item.service_type || '').toLowerCase();
     const d = item.data || {};

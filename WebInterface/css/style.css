@@ -759,6 +759,29 @@ label {
   display: none !important;
 }
 
+.core-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(105px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.core-box {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+}
+
+.core-box-top {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
 @media (max-width: 768px) {
   .metric-strip {
     grid-template-columns: repeat(2, 1fr);

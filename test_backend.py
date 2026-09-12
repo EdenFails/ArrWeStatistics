@@ -324,6 +324,7 @@ def run_tests():
         assert telemetry_res.status_code == 200, f"Telemetry failed: {telemetry_res.text}"
         data = telemetry_res.json()
         assert "telemetry" in data
+        assert "system" in data, "Expected system hardware in telemetry"
         print("[+] Test 4.8 Passed: Authenticated telemetry scraping succeeded.")
 
         cached_res = client.get("/api/telemetry", headers=headers)
@@ -393,6 +394,16 @@ def run_tests():
         assert resp_headers.get("x-frame-options") == "DENY"
         assert "default-src 'self'" in resp_headers.get("content-security-policy", "")
         print("[+] Test 4.11 Passed: Security response headers (CSP, X-Frame-Options, X-Content-Type-Options) verified.")
+
+        # Test 4.11.1: System Hardware Telemetry
+        sys_res = client.get("/api/system/stats", headers=headers)
+        assert sys_res.status_code == 200, f"System stats failed: {sys_res.text}"
+        sdata = sys_res.json()
+        assert "cpu" in sdata and "brand" in sdata["cpu"]
+        assert "ram" in sdata and sdata["ram"]["total_bytes"] > 0
+        assert "gpus" in sdata and isinstance(sdata["gpus"], list)
+        assert "hostname" in sdata
+        print("[+] Test 4.11.1 Passed: Host system hardware telemetry (CPU, RAM, GPUs) verified.")
 
         logout_res = client.post("/api/auth/logout", headers=headers)
         assert logout_res.status_code == 200

@@ -4,7 +4,9 @@ const state = {
   services: [],
   telemetry: [],
   storagePools: [],
+  systemStats: null,
   selectedServiceDetailId: null,
+  selectedSystemDetailTarget: null,
   detailFilter: 'all',
   detailSearch: '',
   pollTimer: null,
@@ -136,6 +138,13 @@ async function pollTelemetry(force = false) {
   try {
     const res = await api(`/api/telemetry?force=${force}`);
     state.telemetry = res.telemetry || [];
+    if (res.system) {
+      state.systemStats = res.system;
+      renderSystemCards();
+      if (state.selectedSystemDetailTarget) {
+        updateSystemDetailView();
+      }
+    }
     renderTelemetryCards();
     updateAggregates();
     if (state.selectedServiceDetailId) {
@@ -565,9 +574,52 @@ async function handleAddService(e) {
   }
 }
 
+function renderSystemCards() {
+  const container = document.getElementById('system-container');
+  if (!container || !state.systemStats) return;
+
+  const sys = state.systemStats;
+  const summaryEl = document.getElementById('sys-host-summary');
+  if (summaryEl) {
+    summaryEl.textContent = `${sys.hostname} • ${sys.os}`;
+  }
+
+  const cardsHtml = [];
+  cardsHtml.push(UI.renderSystemCpuCard(sys));
+
+  if (sys.gpus && sys.gpus.length > 0) {
+    sys.gpus.forEach(g => {
+      cardsHtml.push(UI.renderSystemGpuCard(g));
+    });
+  }
+
+  container.innerHTML = cardsHtml.join('');
+}
+
+// System Hardware Detail Modal Logic
+window.openSystemDetail = function(target = 'cpu') {
+  state.selectedSystemDetailTarget = target;
+  state.selectedServiceDetailId = null;
+
+  const titleEl = document.getElementById('detail-title');
+  if (titleEl) {
+    titleEl.textContent = target === 'cpu' ? 'HOST PROCESSOR & MEMORY TELEMETRY' : 'GRAPHICS ADAPTER TELEMETRY';
+  }
+  updateSystemDetailView();
+  document.getElementById('overlay-service-detail').classList.remove('hidden');
+};
+
+function updateSystemDetailView() {
+  if (!state.selectedSystemDetailTarget || !state.systemStats) return;
+  const bodyEl = document.getElementById('detail-body');
+  if (!bodyEl) return;
+  bodyEl.innerHTML = UI.renderSystemDetailView(state.systemStats, state.selectedSystemDetailTarget);
+}
+
 // Service Detail Drill-Down Modal Logic
 window.openServiceDetail = function(id) {
   state.selectedServiceDetailId = id;
+  state.selectedSystemDetailTarget = null;
   state.detailFilter = 'all';
   state.detailSearch = '';
   const item = state.telemetry.find(t => t.service_id === id);
@@ -583,6 +635,7 @@ window.openServiceDetail = function(id) {
 
 window.closeServiceDetail = function() {
   state.selectedServiceDetailId = null;
+  state.selectedSystemDetailTarget = null;
   document.getElementById('overlay-service-detail').classList.add('hidden');
 };
 

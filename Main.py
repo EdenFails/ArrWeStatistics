@@ -14,6 +14,7 @@ import json
 import database as db
 import auth
 import storage
+import hardware
 from clients import fetch_all_services, fetch_service_data
 
 CACHE_TTL = int(os.getenv("CACHE_TTL_SECONDS", "10"))
@@ -374,6 +375,7 @@ async def poll_telemetry(
             "cached": True,
             "cache_age_seconds": round(now - telemetry_cache["ts"], 2),
             "telemetry": telemetry_cache["items"],
+            "system": hardware.get_system_overview(),
         }
 
     all_svcs = db.fetch_services(include_secrets=True)
@@ -398,7 +400,13 @@ async def poll_telemetry(
         "cached": False,
         "cache_age_seconds": 0.0,
         "telemetry": res,
+        "system": hardware.get_system_overview(),
     }
+
+
+@app.get("/api/system/stats")
+async def get_system_stats(_: bool = Depends(auth.require_auth)):
+    return hardware.get_system_overview()
 
 
 @app.get("/api/metrics/recent")
