@@ -290,16 +290,31 @@ function updateServiceFormFields() {
   const nameInput = document.getElementById('svc-name');
   const apiKeyInput = document.getElementById('svc-apikey');
 
+  const userInput = document.getElementById('svc-user');
+  const passwordInput = document.getElementById('svc-password');
+
   if (stype === 'qbittorrent') {
     if (grpApikey) grpApikey.classList.remove('hidden');
     if (grpAuth) grpAuth.classList.remove('hidden');
     if (apiKeyInput) apiKeyInput.placeholder = 'Auth key / API token (optional if using username & password)';
+    if (userInput) userInput.placeholder = 'Username';
+    if (passwordInput) passwordInput.placeholder = 'Password';
     if (urlInput && (!urlInput.value || urlInput.value.includes('localhost') || urlInput.value.includes('docker'))) {
       urlInput.placeholder = 'http://gluetun:8085 or LAN IP';
     }
     if (nameInput && !nameInput.value) {
       nameInput.placeholder = 'Primary qBittorrent';
     }
+  } else if (stype === 'jellyfin') {
+    if (grpApikey) grpApikey.classList.remove('hidden');
+    if (grpAuth) grpAuth.classList.remove('hidden');
+    if (apiKeyInput) apiKeyInput.placeholder = 'API Key (Jellyfin Dashboard > API Keys) or blank if using User/Pass';
+    if (userInput) userInput.placeholder = 'Jellyfin Username (optional if using API Key)';
+    if (passwordInput) passwordInput.placeholder = 'Jellyfin Password (optional if using API Key)';
+    if (urlInput && (!urlInput.value || urlInput.value.includes('localhost') || urlInput.value.includes('docker'))) {
+      urlInput.placeholder = 'http://host.docker.internal:8096 or LAN IP';
+    }
+    if (nameInput && !nameInput.value) nameInput.placeholder = 'Home Jellyfin';
   } else {
     if (grpAuth) grpAuth.classList.add('hidden');
     if (grpApikey) grpApikey.classList.remove('hidden');
@@ -309,11 +324,6 @@ function updateServiceFormFields() {
         urlInput.placeholder = 'http://gluetun:8080 or LAN IP';
       }
       if (nameInput && !nameInput.value) nameInput.placeholder = 'Primary SABnzbd';
-    } else if (stype === 'jellyfin') {
-      if (urlInput && (!urlInput.value || urlInput.value.includes('localhost') || urlInput.value.includes('docker'))) {
-        urlInput.placeholder = 'http://host.docker.internal:8096 or LAN IP';
-      }
-      if (nameInput && !nameInput.value) nameInput.placeholder = 'Home Jellyfin';
     } else if (stype === 'jellyseer' || stype === 'jellyseerr') {
       if (urlInput && (!urlInput.value || urlInput.value.includes('localhost') || urlInput.value.includes('docker'))) {
         urlInput.placeholder = 'http://host.docker.internal:5055 or LAN IP';

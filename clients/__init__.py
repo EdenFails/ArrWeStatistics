@@ -71,13 +71,24 @@ async def fetch_service_data(client: httpx.AsyncClient, svc: dict) -> dict:
         }
     except httpx.HTTPStatusError as e:
         ms = int((time.perf_counter() - t0) * 1000)
+        code = e.response.status_code
+        err_msg = f"HTTP {code}"
+        if code == 401:
+            if stype == "jellyfin":
+                err_msg = "Jellyfin returned HTTP 401 Unauthorized: Invalid API key or credentials. Generate an API Key in Jellyfin Dashboard > Advanced > API Keys, or enter Username & Password."
+            elif stype == "sabnzbd":
+                err_msg = "SABnzbd returned HTTP 401: Invalid API Key. Check Config > General in SABnzbd."
+            elif stype == "qbittorrent":
+                err_msg = "qBittorrent returned HTTP 401: Invalid Username or Password."
+            elif stype in ("jellyseer", "jellyseerr"):
+                err_msg = "Jellyseerr returned HTTP 401: Invalid API Key. Check Settings > General in Jellyseerr."
         return {
             "service_id": sid,
             "name": name,
             "service_type": stype,
             "status": "error",
             "response_time_ms": ms,
-            "error_message": f"HTTP {e.response.status_code}",
+            "error_message": err_msg,
             "data": {},
         }
     except Exception as e:
