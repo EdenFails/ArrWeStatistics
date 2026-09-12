@@ -187,6 +187,7 @@ const UI = {
 
   jellyfin(d = {}) {
     const streams = d.streams || [];
+    const libraries = d.libraries || [];
 
     let listHtml = '';
     if (streams.length > 0) {
@@ -217,6 +218,21 @@ const UI = {
       `;
     }
 
+    let librariesHtml = '';
+    if (libraries.length > 0) {
+      librariesHtml = `
+        <div class="card-list-title" style="margin-top: 10px;">LIBRARIES (${libraries.length})</div>
+        <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px;">
+          ${libraries.map(lib => `
+            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-dim); border-radius: 4px; padding: 4px 8px; font-size: 10px; display: flex; align-items: center; gap: 6px;">
+              <span style="font-weight: 600; color: var(--accent);">${esc(lib.name)}:</span>
+              <span style="font-family: var(--font-mono); color: var(--text-main);">${esc(lib.formatted || (lib.count + ' items'))}</span>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
     return `
       <div class="stat-grid-2">
         <div class="stat-box">
@@ -236,6 +252,7 @@ const UI = {
           <div class="stat-box-val" style="font-size: 11px;">${esc(d.version || 'Unknown')}</div>
         </div>
       </div>
+      ${librariesHtml}
       ${listHtml}
     `;
   },
@@ -606,6 +623,62 @@ const UI = {
 
     if (type === 'jellyfin') {
       const streams = d.streams || [];
+      const libraries = d.libraries || [];
+      const counts = d.item_counts || {};
+
+      let librarySummaryHtml = '';
+      if (counts.movies || counts.series || counts.episodes || counts.songs || counts.books || counts.total) {
+        librarySummaryHtml = `
+          <div class="stat-grid-2" style="margin-bottom: 16px;">
+            <div class="stat-box">
+              <div class="stat-box-lbl">TOTAL MOVIES</div>
+              <div class="stat-box-val">${(counts.movies || 0).toLocaleString()}</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-box-lbl">TOTAL SHOWS / SERIES</div>
+              <div class="stat-box-val">${(counts.series || 0).toLocaleString()} <span style="font-size: 10px; color: var(--text-dim);">(${(counts.episodes || 0).toLocaleString()} eps)</span></div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-box-lbl">MUSIC TRACKS / ALBUMS</div>
+              <div class="stat-box-val">${(counts.songs || 0).toLocaleString()} <span style="font-size: 10px; color: var(--text-dim);">(${(counts.albums || 0).toLocaleString()} albums)</span></div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-box-lbl">TOTAL CATALOG ITEMS</div>
+              <div class="stat-box-val">${(counts.total || 0).toLocaleString()}</div>
+            </div>
+          </div>
+        `;
+      }
+
+      let librariesTableHtml = '';
+      if (libraries.length > 0) {
+        librariesTableHtml = `
+          <div class="section-title" style="margin-top: 18px; margin-bottom: 8px;">MEDIA LIBRARIES (${libraries.length})</div>
+          <div style="overflow-x: auto; max-height: 350px; overflow-y: auto; border: 1px solid var(--border-dim); margin-bottom: 16px;">
+            <table class="detail-table">
+              <thead>
+                <tr>
+                  <th>LIBRARY NAME</th>
+                  <th>CONTENT TYPE</th>
+                  <th>TOTAL ITEMS</th>
+                  <th>BREAKDOWN</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${libraries.map(lib => `
+                  <tr>
+                    <td style="font-weight: 600; color: var(--text-bright);">${esc(lib.name)}</td>
+                    <td style="font-family: var(--font-mono); text-transform: uppercase; font-size: 10px; color: var(--accent);">${esc(lib.type)}</td>
+                    <td style="font-family: var(--font-mono); font-weight: 600;">${(lib.count || 0).toLocaleString()}</td>
+                    <td style="font-family: var(--font-mono); font-size: 11px; color: var(--text-main);">${esc(lib.formatted || (lib.count + ' items'))}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        `;
+      }
+
       return `
         <div class="stat-grid-2" style="margin-bottom: 16px;">
           <div class="stat-box">
@@ -626,8 +699,11 @@ const UI = {
           </div>
         </div>
 
+        ${librarySummaryHtml}
+        ${librariesTableHtml}
+
         <div class="section-title" style="margin-bottom: 8px;">ACTIVE SESSIONS DETAIL (${streams.length})</div>
-        <div style="overflow-x: auto; max-height: 550px; overflow-y: auto; border: 1px solid var(--border-dim);">
+        <div style="overflow-x: auto; max-height: 400px; overflow-y: auto; border: 1px solid var(--border-dim);">
           <table class="detail-table">
             <thead>
               <tr>

@@ -158,6 +158,42 @@ def run_tests():
         assert cfg_data["status"] in ("offline", "error"), f"Unexpected status: {cfg_data['status']}"
         print("[+] Test 4.7.1 Passed: /api/services/test-config unsaved target connectivity testing verified.")
 
+        # Test Jellyfin library counting logic with MockTransport
+        import httpx
+        import asyncio
+        from clients.jellyfin import _fetch_jellyfin_libraries
+
+        def jelly_handler(req: httpx.Request):
+            if req.url.path == "/Items/Counts":
+                return httpx.Response(200, json={"MovieCount": 150, "SeriesCount": 20, "EpisodeCount": 450, "ItemCount": 620})
+            elif req.url.path == "/Library/VirtualFolders":
+                return httpx.Response(200, json=[
+                    {"Name": "Movies", "ItemId": "lib-movies-1", "CollectionType": "movies"},
+                    {"Name": "Anime", "ItemId": "lib-anime-2", "CollectionType": "tvshows"},
+                ])
+            elif req.url.path == "/Items":
+                parent = req.url.params.get("ParentId")
+                itype = req.url.params.get("IncludeItemTypes")
+                if parent == "lib-movies-1":
+                    return httpx.Response(200, json={"TotalRecordCount": 150})
+                elif parent == "lib-anime-2":
+                    if itype == "Series":
+                        return httpx.Response(200, json={"TotalRecordCount": 20})
+                    elif itype == "Episode":
+                        return httpx.Response(200, json={"TotalRecordCount": 450})
+                return httpx.Response(200, json={"TotalRecordCount": 0})
+            return httpx.Response(404)
+
+        mock_client = httpx.AsyncClient(transport=httpx.MockTransport(jelly_handler))
+        libs, g_counts = asyncio.run(_fetch_jellyfin_libraries(mock_client, "http://fake-jelly", {}, {}))
+        assert len(libs) == 2, f"Expected 2 libraries, got {len(libs)}"
+        assert libs[0]["name"] == "Movies" and libs[0]["count"] == 150
+        assert libs[1]["name"] == "Anime" and libs[1]["count"] == 20 and libs[1]["sub_count"] == 450
+        assert "episodes" in libs[1]["formatted"]
+        assert g_counts.get("movies") == 150
+        assert g_counts.get("total") == 620
+        print("[+] Test 4.7.2 Passed: Jellyfin library stats and per-library item counting verified.")
+
         telemetry_res = client.get("/api/telemetry", headers=headers)
         assert telemetry_res.status_code == 200, f"Telemetry failed: {telemetry_res.text}"
         data = telemetry_res.json()
