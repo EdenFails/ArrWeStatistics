@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   arrwestatistics:
-    image: ghcr.io/<your-github-username>/arrwestatistics:latest
+    image: ghcr.io/edenfails/arrwestatistics:latest
     build:
       context: .
       dockerfile: Dockerfile
