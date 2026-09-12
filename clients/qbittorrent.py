@@ -28,21 +28,28 @@ async def pull_qbittorrent(client: httpx.AsyncClient, svc: dict) -> dict:
     raw_url = svc["base_url"].rstrip("/")
     user = svc.get("username") or ""
     pwd = svc.get("password") or ""
+    apikey = (svc.get("apikey") or "").strip()
 
     candidates = get_candidate_urls(raw_url)
     last_err = None
     payload = None
 
     for url in candidates:
-        key = f"{url}_{user}"
+        key = f"{url}_{user}_{apikey}"
         headers = {
             "User-Agent": "ArrWeStatistics/1.0",
             "Referer": f"{url}/",
             "Origin": url,
         }
-        cookies = _cookie_cache.get(key, {})
+        if apikey:
+            headers["Authorization"] = f"Bearer {apikey}"
+            headers["X-Api-Key"] = apikey
 
-        if cookies or not user:
+        cookies = _cookie_cache.get(key, {})
+        if apikey and not cookies:
+            cookies = {"SID": apikey}
+
+        if cookies or apikey or not user:
             try:
                 r_sync = await client.get(
                     f"{url}/api/v2/sync/maindata",
@@ -52,8 +59,13 @@ async def pull_qbittorrent(client: httpx.AsyncClient, svc: dict) -> dict:
                 )
                 if r_sync.status_code == 200:
                     payload = r_sync.json()
+                    _cookie_cache[key] = cookies
+                elif r_sync.status_code in (401, 403):
+                    _cookie_cache.pop(key, None)
             except httpx.HTTPStatusError as e:
-                if e.response.status_code not in (401, 403):
+                if e.response.status_code in (401, 403):
+                    _cookie_cache.pop(key, None)
+                else:
                     raise
             except (httpx.ConnectError, httpx.TimeoutException) as ce:
                 last_err = ce
@@ -62,21 +74,41 @@ async def pull_qbittorrent(client: httpx.AsyncClient, svc: dict) -> dict:
                 pass
 
         if payload is None and user:
-            try:
-                r_login = await client.post(
-                    f"{url}/api/v2/auth/login",
-                    data={"username": user, "password": pwd},
-                    headers=headers,
-                    timeout=4.0,
-                )
-            except (httpx.ConnectError, httpx.TimeoutException) as ce:
-                last_err = ce
+            user_candidates = [user]
+            if user.capitalize() not in user_candidates:
+                user_candidates.append(user.capitalize())
+            if user.lower() not in user_candidates:
+                user_candidates.append(user.lower())
+
+            r_login = None
+            for u in user_candidates:
+                try:
+                    r_login = await client.post(
+                        f"{url}/api/v2/auth/login",
+                        data={"username": u, "password": pwd},
+                        headers=headers,
+                        cookies={},
+                        timeout=4.0,
+                    )
+                except (httpx.ConnectError, httpx.TimeoutException) as ce:
+                    last_err = ce
+                    break
+
+                if 200 <= r_login.status_code < 300 and "Fails" not in r_login.text:
+                    user = u
+                    key = f"{url}_{user}"
+                    break
+
+            if r_login is None:
                 continue
 
-            if r_login.text.strip() == "Fails." or "Fails" in r_login.text:
-                raise RuntimeError("qBittorrent login rejected: check username and password")
+            if r_login.text.strip() == "Fails." or "Fails" in r_login.text or r_login.status_code == 401:
+                raise RuntimeError(
+                    "qBittorrent login rejected (HTTP 401): invalid username or password. "
+                    "Note: usernames and passwords are case-sensitive (check 'Eden' vs 'eden')."
+                )
             if r_login.status_code == 403:
-                raise RuntimeError("qBittorrent returned 403 Forbidden (check IP ban or Host header / CSRF settings)")
+                raise RuntimeError("qBittorrent returned 403 Forbidden (check IP ban or Host header / CSRF settings in WebUI)")
             if not (200 <= r_login.status_code < 300):
                 raise RuntimeError(f"qBittorrent WebUI returned HTTP {r_login.status_code}")
 

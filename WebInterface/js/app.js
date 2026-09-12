@@ -276,12 +276,14 @@ function updateServiceFormFields() {
   const grpAuth = document.getElementById('grp-svc-auth');
   const urlInput = document.getElementById('svc-url');
   const nameInput = document.getElementById('svc-name');
+  const apiKeyInput = document.getElementById('svc-apikey');
 
   if (stype === 'qbittorrent') {
-    if (grpApikey) grpApikey.classList.add('hidden');
+    if (grpApikey) grpApikey.classList.remove('hidden');
     if (grpAuth) grpAuth.classList.remove('hidden');
+    if (apiKeyInput) apiKeyInput.placeholder = 'Auth key / API token (optional if using username & password)';
     if (urlInput && (!urlInput.value || urlInput.value.includes('localhost') || urlInput.value.includes('docker'))) {
-      urlInput.placeholder = 'http://host.docker.internal:8085 or LAN IP';
+      urlInput.placeholder = 'http://gluetun:8085 or LAN IP';
     }
     if (nameInput && !nameInput.value) {
       nameInput.placeholder = 'Primary qBittorrent';
@@ -289,9 +291,10 @@ function updateServiceFormFields() {
   } else {
     if (grpAuth) grpAuth.classList.add('hidden');
     if (grpApikey) grpApikey.classList.remove('hidden');
+    if (apiKeyInput) apiKeyInput.placeholder = 'Service API key / token';
     if (stype === 'sabnzbd') {
       if (urlInput && (!urlInput.value || urlInput.value.includes('localhost') || urlInput.value.includes('docker'))) {
-        urlInput.placeholder = 'http://host.docker.internal:8080 or LAN IP';
+        urlInput.placeholder = 'http://gluetun:8080 or LAN IP';
       }
       if (nameInput && !nameInput.value) nameInput.placeholder = 'Primary SABnzbd';
     } else if (stype === 'jellyfin') {
@@ -312,22 +315,14 @@ function getServiceFormPayload() {
   const name = (document.getElementById('svc-name').value || '').trim();
   const service_type = (document.getElementById('svc-type').value || '').trim();
   let base_url = (document.getElementById('svc-url').value || '').trim();
+  const apikey = (document.getElementById('svc-apikey').value || '').trim() || null;
+  const username = (document.getElementById('svc-user').value || '').trim() || null;
+  const password = document.getElementById('svc-password').value || null;
   const display_order = parseInt(document.getElementById('svc-order').value || '0', 10);
   const is_enabled = document.getElementById('svc-enabled').checked ? 1 : 0;
 
   if (base_url && !base_url.startsWith('http://') && !base_url.startsWith('https://')) {
     base_url = 'http://' + base_url;
-  }
-
-  let apikey = null;
-  let username = null;
-  let password = null;
-
-  if (service_type === 'qbittorrent') {
-    username = (document.getElementById('svc-user').value || '').trim() || null;
-    password = document.getElementById('svc-password').value || null;
-  } else {
-    apikey = (document.getElementById('svc-apikey').value || '').trim() || null;
   }
 
   return {
