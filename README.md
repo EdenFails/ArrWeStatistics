@@ -54,7 +54,7 @@ Active playback sessions, client platforms, transcoding reasons, audio/video cod
 ![Jellyfin Media Server Details](docs/screenshots/jellyfin_detail.png)
 
 ### HandBrake Transcoding Engine
-Real-time encoding progress, current job information, processing speed (FPS), remaining time (ETA), and live log streaming with automatic completion detection.
+Real-time encoding progress, current job information, processing speed (FPS), remaining time (ETA), and live log streaming.
 
 ![HandBrake Transcoder Monitor](docs/screenshots/handbrake_detail.png)
 
