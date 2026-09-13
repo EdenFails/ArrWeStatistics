@@ -165,10 +165,13 @@ async function pollTelemetry(force = false) {
 
 function startPolling() {
   stopPolling();
+  if (document.visibilityState !== 'visible' || !state.isAuthenticated) return;
   pollTelemetry(true);
   state.pollTimer = setInterval(() => {
-    if (document.visibilityState === 'visible') {
+    if (document.visibilityState === 'visible' && state.isAuthenticated) {
       pollTelemetry(false);
+    } else {
+      stopPolling();
     }
   }, state.pollIntervalMs);
 }
@@ -182,9 +185,14 @@ function stopPolling() {
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && state.isAuthenticated) {
-    pollTelemetry(true);
+    startPolling();
+  } else if (document.hidden) {
+    stopPolling();
   }
 });
+
+window.addEventListener('pagehide', stopPolling);
+window.addEventListener('beforeunload', stopPolling);
 
 function renderTelemetryCards() {
   const container = document.getElementById('cards-container');

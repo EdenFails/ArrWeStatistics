@@ -2,6 +2,8 @@ import os
 import sys
 import tempfile
 import importlib
+import time
+import shutil
 
 test_db = os.path.join(tempfile.gettempdir(), "test_arrwestats.db")
 if os.path.exists(test_db):
@@ -459,6 +461,37 @@ Encoding: task 1 of 1, 98.70 % (35.10 fps, avg 34.10 fps, ETA 00h00m03s)
         assert len(hb_data["recent_completed"]) >= 1, "Expected finished job in recent_completed"
         assert "Show.S01E01" in hb_data["recent_completed"][0]["name"]
         print("[+] Test 4.11.3 Passed: HandBrake 98% completion heuristic and idle state transition verified.")
+
+        # Test 4.11.4: Intel Xe GT Idle Residency Delta & DRM VRAM Telemetry
+        mock_gpu_dir = tempfile.mkdtemp(prefix="mock_drm_gpu_")
+        try:
+            gtidle_dir = os.path.join(mock_gpu_dir, "device", "tile0", "gt0", "gtidle")
+            os.makedirs(gtidle_dir, exist_ok=True)
+            residency_file = os.path.normpath(os.path.join(gtidle_dir, "idle_residency_ms"))
+            with open(residency_file, "w") as f:
+                f.write("10000\n")
+
+            # Seed cache
+            hardware._gpu_util_cache[residency_file] = {
+                "ts": time.time() - 1.0,
+                "idle_ms": 9500,
+                "last_util": 0.0,
+            }
+            # 500ms idle over 1000ms elapsed -> 50% busy
+            calc_util = hardware._calc_xe_gt_utilization(mock_gpu_dir, os.path.join(mock_gpu_dir, "device"))
+            assert calc_util is not None and 45.0 <= calc_util <= 55.0, f"Expected ~50% util, got {calc_util}"
+
+            # Test 100% busy (0 idle increase)
+            hardware._gpu_util_cache[residency_file] = {
+                "ts": time.time() - 1.0,
+                "idle_ms": 10000,
+                "last_util": 0.0,
+            }
+            calc_busy = hardware._calc_xe_gt_utilization(mock_gpu_dir, os.path.join(mock_gpu_dir, "device"))
+            assert calc_busy == 100.0, f"Expected 100% busy, got {calc_busy}"
+        finally:
+            shutil.rmtree(mock_gpu_dir, ignore_errors=True)
+        print("[+] Test 4.11.4 Passed: Intel Xe GT idle residency delta calculation verified.")
 
 
         logout_res = client.post("/api/auth/logout", headers=headers)

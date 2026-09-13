@@ -9,6 +9,9 @@ import io
 import re
 import threading
 import socket
+import struct
+import ctypes
+import json
 from typing import Any
 
 try:
@@ -29,6 +32,8 @@ _win_gpu_perf_cache: dict[str, Any] = {
     "vram": {},
 }
 _gpu_energy_cache: dict[str, Any] = {}
+_gpu_util_cache: dict[str, Any] = {}
+_gpu_fdinfo_cache: dict[str, Any] = {}
 
 
 def _get_cpu_brand() -> str:
@@ -379,6 +384,357 @@ _DRM_PCI_DEVICE_MAP: dict[str, tuple[str, int]] = {
 }
 
 
+def _calc_xe_gt_utilization(card_path: str, dev_path: str) -> float | None:
+    """Calculates GPU core utilization from Intel Xe/i915 GT idle residency counter deltas."""
+    idle_candidates = (
+        os.path.join(card_path, "device/tile0/gt0/gtidle/idle_residency_ms"),
+        os.path.join(card_path, "device/gt0/gtidle/idle_residency_ms"),
+        os.path.join(card_path, "device/tile0/gt1/gtidle/idle_residency_ms"),
+        os.path.join(card_path, "device/gt1/gtidle/idle_residency_ms"),
+        os.path.join(card_path, "gt/gt0/rc6_residency_ms"),
+        os.path.join(card_path, "power/rc6_residency_ms"),
+        os.path.join(dev_path, "tile0/gt0/gtidle/idle_residency_ms"),
+        os.path.join(dev_path, "gt0/gtidle/idle_residency_ms"),
+    )
+    for raw_idle_f in idle_candidates:
+        idle_f = os.path.normpath(raw_idle_f)
+        if os.path.exists(idle_f):
+            try:
+                with open(idle_f, "r") as f:
+                    cur_idle = int(f.read().strip())
+                now = time.time()
+                prev = _gpu_util_cache.get(idle_f)
+                if prev and (now - prev["ts"]) >= 0.3:
+                    dt_ms = (now - prev["ts"]) * 1000.0
+                    d_idle = cur_idle - prev["idle_ms"]
+                    if dt_ms > 0:
+                        idle_ratio = max(0.0, min(1.0, d_idle / dt_ms))
+                        util = round((1.0 - idle_ratio) * 100.0, 1)
+                        _gpu_util_cache[idle_f] = {"ts": now, "idle_ms": cur_idle, "last_util": util}
+                        return util
+                elif not prev:
+                    # First run: take an immediate 40ms mini-sample to establish baseline delta
+                    time.sleep(0.04)
+                    try:
+                        with open(idle_f, "r") as f2:
+                            cur2 = int(f2.read().strip())
+                        now2 = time.time()
+                        dt_ms2 = (now2 - now) * 1000.0
+                        d_idle2 = cur2 - cur_idle
+                        if dt_ms2 > 0:
+                            idle_ratio2 = max(0.0, min(1.0, d_idle2 / dt_ms2))
+                            util = round((1.0 - idle_ratio2) * 100.0, 1)
+                            _gpu_util_cache[idle_f] = {"ts": now2, "idle_ms": cur2, "last_util": util}
+                            return util
+                    except Exception:
+                        pass
+                    _gpu_util_cache[idle_f] = {"ts": now, "idle_ms": cur_idle, "last_util": 0.0}
+                elif "last_util" in prev:
+                    return prev["last_util"]
+            except Exception:
+                pass
+
+    # Status check fallback: if gtidle/idle_status is gt-c0 (active)
+    for status_f in (
+        os.path.join(card_path, "device/tile0/gt0/gtidle/idle_status"),
+        os.path.join(card_path, "device/gt0/gtidle/idle_status"),
+    ):
+        if os.path.exists(status_f):
+            try:
+                with open(status_f, "r") as f:
+                    st = f.read().strip().lower()
+                if st == "gt-c0":
+                    return 50.0  # actively processing
+                elif st == "gt-c6":
+                    return 0.0  # sleeping
+            except Exception:
+                pass
+
+    return None
+
+
+def _query_drm_direct_memory(card_name: str, driver_type: str = "xe") -> tuple[int, int] | None:
+    """Directly queries DRM memory regions via ioctl on /dev/dri/cardX or /dev/dri/renderDX."""
+    if platform.system() != "Linux":
+        return None
+
+    # Discover candidate device nodes
+    candidates = []
+    card_node = f"/dev/dri/{card_name}"
+    if os.path.exists(card_node):
+        candidates.append(card_node)
+    m = re.search(r"card(\d+)", card_name)
+    if m:
+        c_num = int(m.group(1))
+        render_node = f"/dev/dri/renderD{128 + c_num}"
+        if os.path.exists(render_node):
+            candidates.append(render_node)
+
+    if os.path.exists("/dev/dri"):
+        try:
+            for node in sorted(os.listdir("/dev/dri")):
+                if node.startswith("renderD"):
+                    full_p = os.path.join("/dev/dri", node)
+                    if full_p not in candidates:
+                        candidates.append(full_p)
+        except Exception:
+            pass
+
+    for node_path in candidates:
+        if not os.access(node_path, os.R_OK):
+            continue
+
+        # Intel Xe Driver Query: DRM_IOCTL_XE_DEVICE_QUERY
+        if driver_type == "xe":
+            try:
+                import fcntl
+                fd = os.open(node_path, os.O_RDWR | getattr(os, "O_CLOEXEC", 0))
+                try:
+                    # DRM_IOCTL_XE_DEVICE_QUERY: 0xc0286440 (_IOWR('d', 0x40, 40))
+                    # DRM_XE_DEVICE_QUERY_MEM_REGIONS = 1
+                    # struct drm_xe_device_query: extensions(8), query(4), size(4), data(8), reserved(16)
+                    q_buf = bytearray(struct.pack("=QIIQQQ", 0, 1, 0, 0, 0, 0))
+                    fcntl.ioctl(fd, 0xc0286440, q_buf)
+                    _, _, q_size, _, _, _ = struct.unpack("=QIIQQQ", q_buf)
+                    if q_size > 0:
+                        data_buf = bytearray(q_size)
+                        data_addr = ctypes.addressof(ctypes.c_char.from_buffer(data_buf))
+                        q_buf2 = bytearray(struct.pack("=QIIQQQ", 0, 1, q_size, data_addr, 0, 0))
+                        fcntl.ioctl(fd, 0xc0286440, q_buf2)
+
+                        num_regions, _ = struct.unpack_from("=II", data_buf, 0)
+                        offset = 8
+                        for _ in range(num_regions):
+                            if offset + 88 > len(data_buf):
+                                break
+                            # struct drm_xe_mem_region: mem_class(H), instance(H), min_page_size(I), total_size(Q), used(Q)...
+                            m_class, _, _, tot_sz, used_sz, *_ = struct.unpack_from("=HHIQQQQ6Q", data_buf, offset)
+                            offset += 88
+                            # DRM_XE_MEM_REGION_CLASS_VRAM == 1
+                            if m_class == 1 and tot_sz > 0:
+                                return (int(tot_sz), int(used_sz))
+                            elif num_regions == 1 and m_class == 0 and tot_sz > 0:
+                                return (int(tot_sz), int(used_sz))
+                finally:
+                    os.close(fd)
+            except Exception:
+                pass
+
+        # Intel i915 Driver Query: DRM_IOCTL_I915_QUERY
+        elif driver_type == "i915":
+            try:
+                import fcntl
+                fd = os.open(node_path, os.O_RDWR | getattr(os, "O_CLOEXEC", 0))
+                try:
+                    # DRM_IOCTL_I915_QUERY: 0xc0106479 (_IOWR('d', 0x79, 16))
+                    # DRM_I915_QUERY_MEMORY_REGIONS = 4
+                    # struct drm_i915_query_item: query_id(8), length(4), flags(4), data_ptr(8) -> 24 bytes
+                    q_item = bytearray(struct.pack("=QiIQ", 4, 0, 0, 0))
+                    item_addr = ctypes.addressof(ctypes.c_char.from_buffer(q_item))
+                    # struct drm_i915_query: num_items(4), flags(4), items_ptr(8) -> 16 bytes
+                    q_query = bytearray(struct.pack("=IIQ", 1, 0, item_addr))
+                    fcntl.ioctl(fd, 0xc0106479, q_query)
+
+                    _, q_len, _, _ = struct.unpack("=QiIQ", q_item)
+                    if q_len > 0:
+                        data_buf = bytearray(q_len)
+                        data_addr = ctypes.addressof(ctypes.c_char.from_buffer(data_buf))
+                        q_item2 = bytearray(struct.pack("=QiIQ", 4, q_len, 0, data_addr))
+                        item_addr2 = ctypes.addressof(ctypes.c_char.from_buffer(q_item2))
+                        q_query2 = bytearray(struct.pack("=IIQ", 1, 0, item_addr2))
+                        fcntl.ioctl(fd, 0xc0106479, q_query2)
+
+                        num_regions, *_ = struct.unpack_from("=IIII", data_buf, 0)
+                        offset = 16
+                        for _ in range(num_regions):
+                            if offset + 88 > len(data_buf):
+                                break
+                            m_class, _, _, probed_sz, unalloc_sz, *_ = struct.unpack_from("=HHIQQ8Q", data_buf, offset)
+                            offset += 88
+                            # I915_MEMORY_CLASS_DEVICE == 1
+                            if m_class == 1 and probed_sz > 0:
+                                used_sz = max(0, probed_sz - unalloc_sz)
+                                return (int(probed_sz), int(used_sz))
+                finally:
+                    os.close(fd)
+            except Exception:
+                pass
+
+    return None
+
+
+def _query_drm_fdinfo(pci_slot: str, driver_name: str) -> dict[str, Any]:
+    """Scans /proc/*/fdinfo/* for active DRM client memory allocation and engine cycle utilization."""
+    res: dict[str, Any] = {"vram_used": 0, "util_pct": None}
+    if not os.path.exists("/proc"):
+        return res
+
+    seen_clients: set[tuple[str, str]] = set()
+    total_vram_bytes = 0
+    active_cycles_sum = 0
+    total_cycles_sum = 0
+
+    drv_key = "xe" if "xe" in driver_name.lower() else ("i915" if "i915" in driver_name.lower() else ("amdgpu" if "amd" in driver_name.lower() else ""))
+
+    try:
+        for pid_entry in os.listdir("/proc"):
+            if not pid_entry.isdigit():
+                continue
+            fdinfo_dir = os.path.join("/proc", pid_entry, "fdinfo")
+            if not os.path.isdir(fdinfo_dir):
+                continue
+            try:
+                for fd_file in os.listdir(fdinfo_dir):
+                    fd_path = os.path.join(fdinfo_dir, fd_file)
+                    try:
+                        with open(fd_path, "r", errors="ignore") as f:
+                            lines = f.readlines()
+                    except Exception:
+                        continue
+
+                    fd_driver = ""
+                    fd_pdev = ""
+                    fd_client = ""
+                    client_vram = 0
+                    c_active = 0
+                    c_total = 0
+
+                    for line in lines:
+                        if ":" not in line:
+                            continue
+                        k, v = line.split(":", 1)
+                        k = k.strip().lower()
+                        v = v.strip()
+
+                        if k == "drm-driver":
+                            fd_driver = v.lower()
+                        elif k == "drm-pdev":
+                            fd_pdev = v.lower()
+                        elif k == "drm-client-id":
+                            fd_client = v
+                        elif k in ("drm-resident-vram0", "drm-total-vram0", "drm-resident-vram", "drm-total-vram", "drm-resident-local0", "drm-total-local0"):
+                            m_val = re.match(r"(\d+)\s*([a-zA-Z]*)", v)
+                            if m_val:
+                                num = int(m_val.group(1))
+                                unit = m_val.group(2).lower()
+                                mult = 1024 if unit in ("kib", "kb", "k") else (1024**2 if unit in ("mib", "mb", "m") else (1024**3 if unit in ("gib", "gb", "g") else 1))
+                                client_vram = max(client_vram, num * mult)
+                        elif k.startswith("drm-cycles-") and not k.startswith("drm-total-cycles-"):
+                            try:
+                                c_active += int(v.split()[0])
+                            except Exception:
+                                pass
+                        elif k.startswith("drm-total-cycles-"):
+                            try:
+                                c_total += int(v.split()[0])
+                            except Exception:
+                                pass
+
+                    if not fd_driver:
+                        continue
+                    if drv_key and drv_key not in fd_driver:
+                        continue
+                    if pci_slot and fd_pdev and pci_slot.lower() not in fd_pdev:
+                        continue
+
+                    cid_key = (fd_pdev or fd_driver, fd_client or f"{pid_entry}_{fd_file}")
+                    if cid_key not in seen_clients:
+                        seen_clients.add(cid_key)
+                        total_vram_bytes += client_vram
+                        active_cycles_sum += c_active
+                        total_cycles_sum += c_total
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    res["vram_used"] = total_vram_bytes
+
+    # Calculate utilization delta from cycles if available
+    if active_cycles_sum > 0 and total_cycles_sum > 0:
+        now = time.time()
+        cache_key = pci_slot or driver_name
+        prev = _gpu_fdinfo_cache.get(cache_key)
+        if prev and (now - prev["ts"]) >= 0.5:
+            d_active = active_cycles_sum - prev["active"]
+            d_total = total_cycles_sum - prev["total"]
+            if d_total > 0 and d_active >= 0:
+                calc_u = round((d_active / d_total) * 100.0, 1)
+                res["util_pct"] = max(0.0, min(100.0, calc_u))
+                _gpu_fdinfo_cache[cache_key] = {"ts": now, "active": active_cycles_sum, "total": total_cycles_sum, "last_util": res["util_pct"]}
+        elif not prev:
+            _gpu_fdinfo_cache[cache_key] = {"ts": now, "active": active_cycles_sum, "total": total_cycles_sum, "last_util": None}
+        elif "last_util" in prev:
+            res["util_pct"] = prev["last_util"]
+
+    return res
+
+
+def _query_xe_debugfs_vram(card_name: str) -> tuple[int, int] | None:
+    """Parses debugfs vram_mm (TTM VRAM Manager) for Intel Xe graphics."""
+    m = re.search(r"card(\d+)", card_name)
+    minor = m.group(1) if m else "0"
+    debugfs_cands = (
+        f"/sys/kernel/debug/dri/{minor}/tile0/vram_mm",
+        f"/sys/kernel/debug/dri/{minor}/vram_mm",
+        f"/sys/kernel/debug/dri/0/tile0/vram_mm",
+        f"/sys/kernel/debug/dri/0/vram_mm",
+    )
+    for dbg_p in debugfs_cands:
+        if os.path.exists(dbg_p):
+            try:
+                vis_avail = None
+                vis_size = None
+                man_size = None
+                with open(dbg_p, "r", errors="ignore") as f:
+                    for line in f:
+                        line_l = line.strip().lower()
+                        if "visible_avail:" in line_l:
+                            m_a = re.search(r"(\d+)\s*mib", line_l)
+                            if m_a:
+                                vis_avail = int(m_a.group(1)) * (1024**2)
+                        elif "visible_size:" in line_l:
+                            m_s = re.search(r"(\d+)\s*mib", line_l)
+                            if m_s:
+                                vis_size = int(m_s.group(1)) * (1024**2)
+                        elif "man size:" in line_l:
+                            m_m = re.search(r"(\d+)", line_l.split(":", 1)[1])
+                            if m_m:
+                                man_size = int(m_m.group(1))
+                if vis_size and vis_avail is not None:
+                    used = max(0, vis_size - vis_avail)
+                    total = man_size or vis_size
+                    return (total, used)
+            except Exception:
+                pass
+    return None
+
+
+def _query_intel_gpu_top_util() -> float | None:
+    """Runs intel_gpu_top once to read instantaneous engine activity."""
+    if not shutil.which("intel_gpu_top"):
+        return None
+    try:
+        p = subprocess.run(
+            ["intel_gpu_top", "-J", "-s", "100"],
+            capture_output=True,
+            text=True,
+            timeout=0.35,
+        )
+        if p.returncode == 0 and p.stdout:
+            data = json.loads(p.stdout)
+            engines = data.get("engines", {})
+            max_busy = 0.0
+            for eng_info in engines.values():
+                busy = eng_info.get("busy", 0.0)
+                if isinstance(busy, (int, float)) and busy > max_busy:
+                    max_busy = float(busy)
+            return round(max_busy, 1)
+    except Exception:
+        pass
+    return None
+
+
 def _query_linux_drm_gpus() -> list[dict[str, Any]]:
     """Reads Linux DRM subsystem /sys/class/drm/card* (Intel Battlemage/Arc, AMD, NVIDIA)."""
     gpus = []
@@ -454,9 +810,14 @@ def _query_linux_drm_gpus() -> list[dict[str, Any]]:
                     pass
 
             # Fallback to lspci if still generic
-            if (gpu_name.startswith("Intel Graphics") or gpu_name.startswith("GPU (")) and shutil.which("lspci"):
+            pci_slot = ""
+            try:
+                pci_slot = os.path.basename(os.path.realpath(dev_path))
+            except Exception:
+                pass
+
+            if (gpu_name.startswith("Intel Graphics") or gpu_name.startswith("GPU (")) and shutil.which("lspci") and pci_slot:
                 try:
-                    pci_slot = os.path.basename(os.path.realpath(dev_path))
                     p = subprocess.run(["lspci", "-s", pci_slot], capture_output=True, text=True, timeout=1.0)
                     if p.returncode == 0 and p.stdout.strip():
                         m = re.search(r":\s*(?:Intel Corporation|Advanced Micro Devices|NVIDIA Corporation)?\s*(.*?)(?:\(rev|\n|$)", p.stdout)
@@ -486,6 +847,18 @@ def _query_linux_drm_gpus() -> list[dict[str, Any]]:
                         break
                     except Exception:
                         pass
+
+            # Intel Xe / i915 GT Idle Residency delta calculation
+            if gpu_util == 0.0 and vendor == "intel":
+                xe_util = _calc_xe_gt_utilization(card_path, dev_path)
+                if xe_util is not None:
+                    gpu_util = xe_util
+
+            # Fallback to intel_gpu_top if still 0.0 on Intel
+            if gpu_util == 0.0 and vendor == "intel":
+                igt_util = _query_intel_gpu_top_util()
+                if igt_util is not None:
+                    gpu_util = igt_util
 
             # GPU Frequency
             freq_mhz = None
@@ -519,7 +892,7 @@ def _query_linux_drm_gpus() -> list[dict[str, Any]]:
                             if raw_freq > 1000000:
                                 freq_mhz = round(raw_freq / 1000000.0, 1)
                             elif raw_freq > 10000:
-                                freq_mhz = round(raw_freq / 1000.0, 1)
+                                freq_mhz = round(raw_freq / 10000.0, 1)
                             elif raw_freq > 0:
                                 freq_mhz = round(raw_freq, 1)
                         if freq_mhz and freq_mhz > 0:
@@ -560,44 +933,72 @@ def _query_linux_drm_gpus() -> list[dict[str, Any]]:
             vram_total = 0
             vram_used = 0
 
-            # Priority 1: Known model physical specification (e.g. Arc B580 is 12GB physical GDDR6)
-            if default_vram > 0:
+            # Priority 1: Direct DRM Query IOCTL (exact kernel memory allocator stats)
+            if drv_base in ("xe", "i915"):
+                drm_mem = _query_drm_direct_memory(c, driver_type=drv_base)
+                if drm_mem:
+                    vram_total, vram_used = drm_mem
+
+            # Priority 2: Known model physical specification (e.g. Arc B580 is 12GB physical GDDR6)
+            if default_vram > 0 and vram_total == 0:
                 vram_total = default_vram
 
-            vram_tot_cands = (
-                os.path.join(card_path, "device/tile0/vram_total_bytes"),
-                os.path.join(card_path, "device/tile0/vram0/total_bytes"),
-                os.path.join(card_path, "device/lmem_total_bytes"),
-                os.path.join(card_path, "lmem_total_bytes"),
-                os.path.join(dev_path, "mem_info_vram_total"),
-            )
-            for f_c in vram_tot_cands:
-                if os.path.exists(f_c):
-                    try:
-                        with open(f_c, "r") as f:
-                            raw_tot = int(f.read().strip())
-                        if raw_tot > 0:
-                            vram_total = raw_tot
-                            break
-                    except Exception:
-                        pass
+            # Priority 3: DRM client fdinfo memory and cycle tracking
+            if vram_used == 0 or gpu_util == 0.0:
+                fdinfo_res = _query_drm_fdinfo(pci_slot, driver_name)
+                if vram_used == 0 and fdinfo_res.get("vram_used", 0) > 0:
+                    vram_used = fdinfo_res["vram_used"]
+                if gpu_util == 0.0 and fdinfo_res.get("util_pct") is not None:
+                    gpu_util = fdinfo_res["util_pct"]
 
-            vram_used_cands = (
-                os.path.join(card_path, "device/tile0/vram_used_bytes"),
-                os.path.join(card_path, "device/tile0/vram0/used_bytes"),
-                os.path.join(card_path, "device/lmem_used_bytes"),
-                os.path.join(card_path, "lmem_used_bytes"),
-                os.path.join(dev_path, "mem_info_vram_used"),
-            )
-            for f_c in vram_used_cands:
-                if os.path.exists(f_c):
-                    try:
-                        with open(f_c, "r") as f:
-                            vram_used = int(f.read().strip())
-                        if vram_used > 0:
-                            break
-                    except Exception:
-                        pass
+            # Priority 4: Debugfs TTM vram_mm
+            if vram_used == 0 and drv_base == "xe":
+                dbg_mem = _query_xe_debugfs_vram(c)
+                if dbg_mem:
+                    tot_d, usd_d = dbg_mem
+                    if vram_total == 0 and tot_d > 0:
+                        vram_total = tot_d
+                    if usd_d > 0:
+                        vram_used = usd_d
+
+            # Priority 5: Sysfs paths for VRAM total & used (AMD / standard DRM / fallbacks)
+            if vram_total == 0:
+                vram_tot_cands = (
+                    os.path.join(card_path, "device/tile0/vram_total_bytes"),
+                    os.path.join(card_path, "device/tile0/vram0/total_bytes"),
+                    os.path.join(card_path, "device/lmem_total_bytes"),
+                    os.path.join(card_path, "lmem_total_bytes"),
+                    os.path.join(dev_path, "mem_info_vram_total"),
+                )
+                for f_c in vram_tot_cands:
+                    if os.path.exists(f_c):
+                        try:
+                            with open(f_c, "r") as f:
+                                raw_tot = int(f.read().strip())
+                            if raw_tot > 0:
+                                vram_total = raw_tot
+                                break
+                        except Exception:
+                            pass
+
+            if vram_used == 0:
+                vram_used_cands = (
+                    os.path.join(card_path, "device/tile0/vram_used_bytes"),
+                    os.path.join(card_path, "device/tile0/vram0/used_bytes"),
+                    os.path.join(card_path, "device/tile0/memory/used_bytes"),
+                    os.path.join(card_path, "device/lmem_used_bytes"),
+                    os.path.join(card_path, "lmem_used_bytes"),
+                    os.path.join(dev_path, "mem_info_vram_used"),
+                )
+                for f_c in vram_used_cands:
+                    if os.path.exists(f_c):
+                        try:
+                            with open(f_c, "r") as f:
+                                vram_used = int(f.read().strip())
+                            if vram_used > 0:
+                                break
+                        except Exception:
+                            pass
 
             # Check PCI BAR2 aperture if vram_total not found
             if vram_total == 0:
