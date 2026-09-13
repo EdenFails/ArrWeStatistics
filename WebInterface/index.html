@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ArrWeStatistics</title>
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/style.css?v=1.2">
 </head>
 <body>
   <div id="app">
@@ -79,9 +79,9 @@
 
       <main class="dashboard-body">
         <div class="system-section" id="section-system" style="margin-bottom: 24px;">
-          <div class="section-title" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <div class="section-title" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
             <span>HOST SYSTEM, HARDWARE &amp; STORAGE</span>
-            <div style="display: flex; align-items: center; gap: 10px;">
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
               <span id="sys-host-summary" style="font-size: 10px; font-family: var(--font-mono); color: var(--text-dim);"></span>
               <button id="btn-open-storage-modal" class="btn btn-sm">+ ADD DRIVE / POOL</button>
             </div>
@@ -187,9 +187,9 @@
               </div>
 
               <div id="service-feedback" class="form-feedback hidden"></div>
-              <div style="display: flex; gap: 8px; margin-top: 14px;">
+              <div style="display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap;">
                 <button type="button" id="btn-test-service" class="btn">TEST CONNECTION</button>
-                <button type="submit" id="btn-save-service" class="btn btn-primary" style="flex: 1;">TEST & SAVE</button>
+                <button type="submit" id="btn-save-service" class="btn btn-primary" style="flex: 1 1 140px;">TEST & SAVE</button>
                 <button type="button" id="btn-cancel-edit-service" class="btn btn-subtle hidden">CANCEL</button>
               </div>
             </form>
@@ -255,7 +255,7 @@
 
     <!-- Filesystem / Folder Browser Modal -->
     <div id="overlay-folder-browser" class="overlay hidden">
-      <div class="overlay-dialog" style="max-width: 640px; width: 95vw;">
+      <div class="overlay-dialog" style="max-width: 640px; width: 100%;">
         <div class="dialog-header">
           <div class="dialog-title" id="browser-title">FILE &amp; FOLDER BROWSER</div>
           <button id="btn-close-browser" class="btn-close" aria-label="Close">X</button>
@@ -287,7 +287,7 @@
     </div>
   </div>
 
-  <script src="/static/js/components.js?v=1.1"></script>
-  <script src="/static/js/app.js?v=1.1"></script>
+  <script src="/static/js/components.js?v=1.2"></script>
+  <script src="/static/js/app.js?v=1.2"></script>
 </body>
 </html>

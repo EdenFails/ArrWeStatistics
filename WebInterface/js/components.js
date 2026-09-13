@@ -1051,7 +1051,7 @@ const UI = {
           <button class="filter-chip ${filter === 'completed' ? 'active' : ''}" onclick="setDetailFilter('completed')">COMPLETED (${counts.completed})</button>
           <button class="filter-chip ${filter === 'paused' ? 'active' : ''}" onclick="setDetailFilter('paused')">PAUSED (${counts.paused})</button>
           <button class="filter-chip ${filter === 'active' ? 'active' : ''}" onclick="setDetailFilter('active')">ACTIVE (${counts.active})</button>
-          <div style="flex: 1; min-width: 180px; margin-left: auto;">
+          <div class="detail-search-wrap" style="flex: 1 1 180px; min-width: 0; max-width: 100%;">
             <input type="text" id="detail-search-input" class="input-text" style="width: 100%; padding: 4px 8px; font-size: 11px;" placeholder="Search torrents by name or category..." value="${esc(searchQuery)}" oninput="handleDetailSearch(this.value)">
           </div>
         </div>
@@ -1326,7 +1326,7 @@ const UI = {
           <button class="filter-chip ${filter === 'approved' ? 'active' : ''}" onclick="setDetailFilter('approved')">APPROVED (${counts.approved})</button>
           <button class="filter-chip ${filter === 'movies' ? 'active' : ''}" onclick="setDetailFilter('movies')">MOVIES</button>
           <button class="filter-chip ${filter === 'tv' ? 'active' : ''}" onclick="setDetailFilter('tv')">SERIES</button>
-          <div style="flex: 1; min-width: 180px; margin-left: auto;">
+          <div class="detail-search-wrap" style="flex: 1 1 180px; min-width: 0; max-width: 100%;">
             <input type="text" id="detail-search-input" class="input-text" style="width: 100%; padding: 4px 8px; font-size: 11px;" placeholder="Search requests by title or user..." value="${esc(search)}" oninput="handleDetailSearch(this.value)">
           </div>
         </div>
@@ -1447,9 +1447,9 @@ const UI = {
           </div>
         </div>
 
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
           <div class="section-title" style="margin: 0;">LOG ACTIVITY &amp; RECENT CONVERSIONS</div>
-          <div style="width: 240px;">
+          <div class="detail-search-wrap" style="flex: 1 1 200px; max-width: 100%;">
             <input type="text" id="detail-search-input" class="input-text" style="width: 100%; padding: 4px 8px; font-size: 11px;" placeholder="Search log or conversions..." value="${esc(search)}" oninput="handleDetailSearch(this.value)">
           </div>
         </div>
