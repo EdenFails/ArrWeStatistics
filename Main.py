@@ -30,7 +30,7 @@ async def app_lifespan(app: FastAPI):
     global http_pool
     db.init_db()
     limits = httpx.Limits(max_keepalive_connections=20, max_connections=50, keepalive_expiry=30.0)
-    timeouts = httpx.Timeout(connect=5.0, read=6.0, write=5.0, pool=5.0)
+    timeouts = httpx.Timeout(connect=3.0, read=4.0, write=3.0, pool=3.0)
     http_pool = httpx.AsyncClient(limits=limits, timeout=timeouts, follow_redirects=True)
     yield
     if http_pool:

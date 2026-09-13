@@ -1,7 +1,9 @@
+import time
 import asyncio
 import httpx
 
 _jellyfin_token_cache: dict[str, str] = {}
+_jellyfin_library_cache: dict[str, dict] = {}
 
 
 async def _get_jellyfin_token(client: httpx.AsyncClient, url: str, svc: dict) -> str:
@@ -275,11 +277,35 @@ async def pull_jellyfin(client: httpx.AsyncClient, svc: dict) -> dict:
         play_st = s.get("PlayState", {})
         tx_info = s.get("TranscodingInfo", {})
 
-        is_tx = bool(tx_info)
-        is_direct = not is_tx or tx_info.get("IsVideoDirect", False)
+        play_method = (play_st.get("PlayMethod") or "").strip().lower()
 
-        hw = tx_info.get("HardwareAccelerationType")
-        has_hw = bool(hw and hw.lower() != "none")
+        is_tx = False
+        is_direct = True
+        is_direct_stream = False
+
+        if tx_info:
+            is_tx = True
+            is_video_direct = tx_info.get("IsVideoDirect", False)
+            is_audio_direct = tx_info.get("IsAudioDirect", False)
+            if is_video_direct and is_audio_direct:
+                is_tx = False
+                is_direct = True
+            elif is_video_direct and not is_audio_direct:
+                is_direct_stream = True
+        elif play_method:
+            if play_method == "transcode":
+                is_tx = True
+                is_direct = False
+            elif play_method == "directstream":
+                is_tx = True
+                is_direct_stream = True
+                is_direct = False
+            elif play_method == "directplay":
+                is_direct = True
+                is_tx = False
+
+        hw = tx_info.get("HardwareAccelerationType") if tx_info else None
+        has_hw = bool(hw and str(hw).lower() not in ("none", ""))
 
         if is_tx:
             trans_cnt += 1
@@ -287,6 +313,15 @@ async def pull_jellyfin(client: httpx.AsyncClient, svc: dict) -> dict:
                 hw_cnt += 1
         else:
             direct_cnt += 1
+
+        if is_direct:
+            play_label = "Direct Play"
+        elif is_direct_stream:
+            play_label = "Direct Stream"
+        elif has_hw:
+            play_label = f"Transcode (HW: {hw})"
+        else:
+            play_label = "Transcode (SW)"
 
         pos = play_st.get("PositionTicks", 0)
         total_ticks = item.get("RunTimeTicks", 1)
@@ -316,13 +351,30 @@ async def pull_jellyfin(client: httpx.AsyncClient, svc: dict) -> dict:
             "progress_percent": pct,
             "is_transcoding": is_tx,
             "is_direct_play": is_direct,
+            "is_direct_stream": is_direct_stream,
+            "play_method_label": play_label,
             "hardware_acceleration": hw if has_hw else None,
-            "transcode_reasons": tx_info.get("TranscodeReasons", []),
-            "video_codec": tx_info.get("VideoCodec") or (item.get("MediaStreams", [{}])[0].get("Codec") if item.get("MediaStreams") else None),
-            "audio_codec": tx_info.get("AudioCodec"),
+            "transcode_reasons": tx_info.get("TranscodeReasons", []) if tx_info else [],
+            "video_codec": (tx_info.get("VideoCodec") if tx_info else None) or (item.get("MediaStreams", [{}])[0].get("Codec") if item.get("MediaStreams") else None),
+            "audio_codec": tx_info.get("AudioCodec") if tx_info else None,
         })
 
-    libraries, item_counts = await _fetch_jellyfin_libraries(client, url, hdrs, params)
+    # Sort streams alphabetically by media title, then user name so positions are perfectly stable across refreshes
+    streams.sort(key=lambda x: (x["media_title"].lower(), x["user_name"].lower()))
+
+    # Fetch libraries with 120s caching to eliminate heavy repetitive DB scans
+    now = time.time()
+    lib_entry = _jellyfin_library_cache.get(url)
+    if lib_entry and (now - lib_entry["ts"] < 120.0):
+        libraries = lib_entry["libraries"]
+        item_counts = lib_entry["item_counts"]
+    else:
+        libraries, item_counts = await _fetch_jellyfin_libraries(client, url, hdrs, params)
+        _jellyfin_library_cache[url] = {
+            "ts": now,
+            "libraries": libraries,
+            "item_counts": item_counts,
+        }
 
     return {
         "server_name": sys_info.get("ServerName", "Jellyfin Server"),

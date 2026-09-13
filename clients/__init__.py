@@ -39,7 +39,7 @@ async def fetch_service_data(client: httpx.AsyncClient, svc: dict) -> dict:
 
     t0 = time.perf_counter()
     try:
-        data = await fn(client, svc)
+        data = await asyncio.wait_for(fn(client, svc), timeout=4.0)
         ms = int((time.perf_counter() - t0) * 1000)
         return {
             "service_id": sid,
@@ -61,7 +61,7 @@ async def fetch_service_data(client: httpx.AsyncClient, svc: dict) -> dict:
             "error_message": "Connection refused",
             "data": {},
         }
-    except httpx.TimeoutException:
+    except (httpx.TimeoutException, asyncio.TimeoutError):
         ms = int((time.perf_counter() - t0) * 1000)
         return {
             "service_id": sid,

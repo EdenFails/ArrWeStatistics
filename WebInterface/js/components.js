@@ -199,20 +199,30 @@ const UI = {
         <div class="card-list-title">ACTIVE STREAMS (${streams.length})</div>
         <div class="card-items-list">
           ${streams.map(s => {
-            const txLabel = s.is_transcoding 
-              ? (s.hardware_acceleration ? `Transcode (HW: ${esc(s.hardware_acceleration)})` : 'Transcode (SW)')
-              : 'Direct Play';
+            const isTx = s.is_transcoding && !s.is_direct_play;
+            const isDs = s.is_direct_stream;
+            let badgeClass = 'badge-online';
+            let badgeStyle = 'color: #4caf50; background: rgba(76, 175, 80, 0.15); border: 1px solid rgba(76, 175, 80, 0.3);';
+            let label = s.play_method_label || (s.is_transcoding ? 'Transcode' : 'Direct Play');
+
+            if (isTx) {
+              badgeClass = 'badge-warn';
+              badgeStyle = 'color: #ffb74d; background: rgba(255, 152, 0, 0.15); border: 1px solid rgba(255, 152, 0, 0.3);';
+            } else if (isDs) {
+              badgeClass = 'badge-info';
+              badgeStyle = 'color: #64b5f6; background: rgba(33, 150, 243, 0.15); border: 1px solid rgba(33, 150, 243, 0.3);';
+            }
             return `
               <div class="card-item-row">
                 <div class="item-row-top">
                   <span class="item-row-name" title="${esc(s.media_title)}">${esc(s.media_title)}</span>
                   <span class="item-row-meta">${esc(s.user_name)} | ${esc(s.client)}</span>
                 </div>
-                <div class="item-row-top" style="margin-top: 2px;">
-                  <span class="item-row-meta" style="color: var(--text-main); font-size: 9px;">${txLabel}</span>
-                  <span class="item-row-meta">${s.progress_percent}%</span>
+                <div class="item-row-top" style="margin-top: 4px; align-items: center;">
+                  <span class="card-status-badge ${badgeClass}" style="font-size: 9px; padding: 2px 6px; font-weight: 700; border-radius: 3px; ${badgeStyle}">${esc(label.toUpperCase())}</span>
+                  <span class="item-row-meta" style="font-family: var(--font-mono); font-size: 10px;">${s.progress_percent}%</span>
                 </div>
-                <div class="progress-bar-track">
+                <div class="progress-bar-track" style="margin-top: 4px;">
                   <div class="progress-bar-fill" style="width: ${s.progress_percent}%;"></div>
                 </div>
               </div>
@@ -1233,13 +1243,17 @@ const UI = {
               ${streams.length === 0 ? `
                 <tr><td colspan="5" style="text-align: center; padding: 24px; color: var(--text-dim);">No active playback sessions</td></tr>
               ` : streams.map(s => {
-                const method = s.is_transcoding ? `Transcode ${s.hardware_acceleration ? `(HW: ${esc(s.hardware_acceleration)})` : '(SW)'}` : 'Direct Play';
+                const isTx = s.is_transcoding && !s.is_direct_play;
+                const isDs = s.is_direct_stream;
+                const method = s.play_method_label || (s.is_transcoding ? `Transcode ${s.hardware_acceleration ? `(HW: ${esc(s.hardware_acceleration)})` : '(SW)'}` : 'Direct Play');
+                let badgeClass = isTx ? 'badge-warn' : (isDs ? 'badge-info' : 'badge-online');
+                let badgeStyle = isTx ? 'color: #ffb74d; background: rgba(255, 152, 0, 0.15); border: 1px solid rgba(255, 152, 0, 0.3);' : (isDs ? 'color: #64b5f6; background: rgba(33, 150, 243, 0.15); border: 1px solid rgba(33, 150, 243, 0.3);' : 'color: #4caf50; background: rgba(76, 175, 80, 0.15); border: 1px solid rgba(76, 175, 80, 0.3);');
                 return `
                   <tr>
                     <td style="font-weight: 500;">${esc(s.media_title)}</td>
                     <td style="font-family: var(--font-mono);">${esc(s.user_name)}</td>
                     <td style="font-family: var(--font-mono); font-size: 10px;">${esc(s.client)} (${esc(s.device_name)})</td>
-                    <td style="font-family: var(--font-mono); font-size: 10px; color: ${s.is_transcoding ? 'var(--status-warn)' : 'var(--status-online)'};">${method}</td>
+                    <td><span class="card-status-badge ${badgeClass}" style="font-size: 9px; padding: 2px 6px; font-weight: 700; border-radius: 3px; ${badgeStyle}">${esc(method.toUpperCase())}</span></td>
                     <td>
                       <div style="font-family: var(--font-mono); font-size: 9px; margin-bottom: 2px;">${s.progress_percent}%</div>
                       <div class="progress-track"><div class="progress-fill" style="width: ${s.progress_percent}%;"></div></div>

@@ -66,6 +66,7 @@ async function checkInitStatus() {
       showView('login');
     } else {
       showView('dashboard');
+      loadSavedTelemetry();
       startPolling();
       loadServices();
       loadStoragePools();
@@ -111,6 +112,7 @@ async function handleLoginSubmit(e) {
     });
     state.isAuthenticated = true;
     showView('dashboard');
+    loadSavedTelemetry();
     startPolling();
     loadServices();
     loadStoragePools();
@@ -155,6 +157,12 @@ async function pollTelemetry(force = false) {
       statusTag.textContent = 'ACTIVE';
       statusTag.className = 'tag tag-ok';
     }
+    try {
+      localStorage.setItem('arrwestats_last_telemetry', JSON.stringify({
+        telemetry: state.telemetry,
+        system: state.systemStats,
+      }));
+    } catch (e) {}
   } catch (err) {
     if (statusTag && state.isAuthenticated) {
       statusTag.textContent = 'UNREACHABLE';
@@ -163,10 +171,27 @@ async function pollTelemetry(force = false) {
   }
 }
 
+function loadSavedTelemetry() {
+  try {
+    const raw = localStorage.getItem('arrwestats_last_telemetry');
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (data.telemetry && data.telemetry.length > 0) {
+      state.telemetry = data.telemetry;
+      renderTelemetryCards();
+      updateAggregates();
+    }
+    if (data.system) {
+      state.systemStats = data.system;
+      renderSystemCards();
+    }
+  } catch (e) {}
+}
+
 function startPolling() {
   stopPolling();
   if (document.visibilityState !== 'visible' || !state.isAuthenticated) return;
-  pollTelemetry(true);
+  pollTelemetry(false);
   state.pollTimer = setInterval(() => {
     if (document.visibilityState === 'visible' && state.isAuthenticated) {
       pollTelemetry(false);
