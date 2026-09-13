@@ -491,6 +491,9 @@ def update_storage_stats(
 
 def update_daily_network_bandwidth(raw_recv: int, raw_sent: int) -> dict[str, int]:
     """Updates daily network bandwidth counters based on raw cumulative bytes from system."""
+    if raw_recv <= 0 and raw_sent <= 0:
+        return {"today_recv": 0, "today_sent": 0}
+
     import datetime
     today = datetime.date.today().isoformat()
     conn = get_conn()
@@ -502,24 +505,67 @@ def update_daily_network_bandwidth(raw_recv: int, raw_sent: int) -> dict[str, in
     ).fetchone()
 
     if not row:
+        # Check if there is a previous recorded day to attribute overnight transfers while dormant
+        prev = c.execute(
+            "SELECT date_key, last_raw_recv, last_raw_sent FROM network_bandwidth_daily WHERE date_key < ? ORDER BY date_key DESC LIMIT 1",
+            (today,),
+        ).fetchone()
+
+        overnight_recv = 0
+        overnight_sent = 0
+
+        if prev and prev["last_raw_recv"] is not None and prev["last_raw_recv"] > 0:
+            p_recv = prev["last_raw_recv"]
+            p_sent = prev["last_raw_sent"] or 0
+            # Guard against container -> host transition: if previous was small (<50MB) and new is huge (>5GB)
+            if not (p_recv < 50 * 1024 * 1024 and raw_recv > 5 * 1024 * 1024 * 1024):
+                if raw_recv >= p_recv:
+                    overnight_recv = raw_recv - p_recv
+                else:
+                    # Machine rebooted overnight between polls
+                    overnight_recv = raw_recv
+
+            if not (p_sent < 50 * 1024 * 1024 and raw_sent > 5 * 1024 * 1024 * 1024):
+                if raw_sent >= p_sent:
+                    overnight_sent = raw_sent - p_sent
+                else:
+                    overnight_sent = raw_sent
+
         c.execute(
             """
             INSERT INTO network_bandwidth_daily (date_key, bytes_recv, bytes_sent, last_raw_recv, last_raw_sent, updated_at)
-            VALUES (?, 0, 0, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
-            (today, raw_recv, raw_sent),
+            (today, overnight_recv, overnight_sent, raw_recv, raw_sent),
         )
         conn.commit()
         conn.close()
-        return {"today_recv": 0, "today_sent": 0}
+        return {"today_recv": overnight_recv, "today_sent": overnight_sent}
 
-    cur_recv = row["bytes_recv"]
-    cur_sent = row["bytes_sent"]
-    last_raw_recv = row["last_raw_recv"]
-    last_raw_sent = row["last_raw_sent"]
+    cur_recv = row["bytes_recv"] or 0
+    cur_sent = row["bytes_sent"] or 0
+    last_raw_recv = row["last_raw_recv"] or 0
+    last_raw_sent = row["last_raw_sent"] or 0
 
-    d_recv = raw_recv - last_raw_recv if (raw_recv >= last_raw_recv and last_raw_recv > 0) else 0
-    d_sent = raw_sent - last_raw_sent if (raw_sent >= last_raw_sent and last_raw_sent > 0) else 0
+    # Guard against container -> host transition or baseline shifts
+    if last_raw_recv > 0 and last_raw_recv < 50 * 1024 * 1024 and raw_recv > 5 * 1024 * 1024 * 1024:
+        d_recv = 0
+    elif last_raw_recv == 0:
+        d_recv = 0
+    elif raw_recv >= last_raw_recv:
+        d_recv = raw_recv - last_raw_recv
+    else:
+        # System rebooted or counter reset during the day
+        d_recv = raw_recv
+
+    if last_raw_sent > 0 and last_raw_sent < 50 * 1024 * 1024 and raw_sent > 5 * 1024 * 1024 * 1024:
+        d_sent = 0
+    elif last_raw_sent == 0:
+        d_sent = 0
+    elif raw_sent >= last_raw_sent:
+        d_sent = raw_sent - last_raw_sent
+    else:
+        d_sent = raw_sent
 
     new_recv = cur_recv + d_recv
     new_sent = cur_sent + d_sent
@@ -557,8 +603,8 @@ def get_daily_network_bandwidth() -> dict[str, Any]:
 
     today_recv = row["bytes_recv"] if row else 0
     today_sent = row["bytes_sent"] if row else 0
-    all_time_recv = (total_row["total_recv"] or 0) if total_row else 0
-    all_time_sent = (total_row["total_sent"] or 0) if total_row else 0
+    all_time_recv = max((total_row["total_recv"] or 0) if total_row else 0, today_recv)
+    all_time_sent = max((total_row["total_sent"] or 0) if total_row else 0, today_sent)
 
     return {
         "date": today,

@@ -386,7 +386,7 @@ _DRM_PCI_DEVICE_MAP: dict[str, tuple[str, int]] = {
 
 def _calc_xe_gt_utilization(card_path: str, dev_path: str) -> float | None:
     """Calculates GPU core utilization from Intel Xe/i915 GT idle residency counter deltas."""
-    idle_candidates = (
+    idle_candidates = [
         os.path.join(card_path, "device/tile0/gt0/gtidle/idle_residency_ms"),
         os.path.join(card_path, "device/gt0/gtidle/idle_residency_ms"),
         os.path.join(card_path, "device/tile0/gt1/gtidle/idle_residency_ms"),
@@ -395,7 +395,26 @@ def _calc_xe_gt_utilization(card_path: str, dev_path: str) -> float | None:
         os.path.join(card_path, "power/rc6_residency_ms"),
         os.path.join(dev_path, "tile0/gt0/gtidle/idle_residency_ms"),
         os.path.join(dev_path, "gt0/gtidle/idle_residency_ms"),
-    )
+        os.path.join(dev_path, "tile0/gt0/rc6_residency_ms"),
+    ]
+
+    # Recursive dynamic search if direct candidates not present
+    has_candidate = any(os.path.exists(c) for c in idle_candidates)
+    if not has_candidate:
+        for base_p in (dev_path, card_path):
+            if not os.path.exists(base_p):
+                continue
+            try:
+                for root, dirs, files in os.walk(base_p):
+                    if os.path.relpath(root, base_p).count(os.sep) > 4:
+                        continue
+                    for f_name in files:
+                        f_low = f_name.lower()
+                        if f_low in ("idle_residency_ms", "rc6_residency_ms", "gt_idle_residency_ms") or "idle_residency" in f_low:
+                            idle_candidates.append(os.path.join(root, f_name))
+            except Exception:
+                pass
+
     for raw_idle_f in idle_candidates:
         idle_f = os.path.normpath(raw_idle_f)
         if os.path.exists(idle_f):
@@ -435,10 +454,12 @@ def _calc_xe_gt_utilization(card_path: str, dev_path: str) -> float | None:
                 pass
 
     # Status check fallback: if gtidle/idle_status is gt-c0 (active)
-    for status_f in (
+    status_cands = [
         os.path.join(card_path, "device/tile0/gt0/gtidle/idle_status"),
         os.path.join(card_path, "device/gt0/gtidle/idle_status"),
-    ):
+        os.path.join(dev_path, "tile0/gt0/gtidle/idle_status"),
+    ]
+    for status_f in status_cands:
         if os.path.exists(status_f):
             try:
                 with open(status_f, "r") as f:
@@ -460,21 +481,23 @@ def _query_drm_direct_memory(card_name: str, driver_type: str = "xe") -> tuple[i
 
     # Discover candidate device nodes
     candidates = []
-    card_node = f"/dev/dri/{card_name}"
-    if os.path.exists(card_node):
-        candidates.append(card_node)
-    m = re.search(r"card(\d+)", card_name)
-    if m:
-        c_num = int(m.group(1))
-        render_node = f"/dev/dri/renderD{128 + c_num}"
-        if os.path.exists(render_node):
-            candidates.append(render_node)
+    for dri_root in ("/dev/dri", "/host/dev/dri"):
+        if not os.path.exists(dri_root):
+            continue
+        card_node = os.path.join(dri_root, card_name)
+        if os.path.exists(card_node):
+            candidates.append(card_node)
+        m = re.search(r"card(\d+)", card_name)
+        if m:
+            c_num = int(m.group(1))
+            render_node = os.path.join(dri_root, f"renderD{128 + c_num}")
+            if os.path.exists(render_node):
+                candidates.append(render_node)
 
-    if os.path.exists("/dev/dri"):
         try:
-            for node in sorted(os.listdir("/dev/dri")):
+            for node in sorted(os.listdir(dri_root)):
                 if node.startswith("renderD"):
-                    full_p = os.path.join("/dev/dri", node)
+                    full_p = os.path.join(dri_root, node)
                     if full_p not in candidates:
                         candidates.append(full_p)
         except Exception:
@@ -488,7 +511,16 @@ def _query_drm_direct_memory(card_name: str, driver_type: str = "xe") -> tuple[i
         if driver_type == "xe":
             try:
                 import fcntl
-                fd = os.open(node_path, os.O_RDWR | getattr(os, "O_CLOEXEC", 0))
+                fd = None
+                for open_flag in (os.O_RDWR, os.O_RDONLY):
+                    try:
+                        fd = os.open(node_path, open_flag | getattr(os, "O_CLOEXEC", 0))
+                        break
+                    except Exception:
+                        pass
+                if fd is None:
+                    continue
+
                 try:
                     # DRM_IOCTL_XE_DEVICE_QUERY: 0xc0286440 (_IOWR('d', 0x40, 40))
                     # DRM_XE_DEVICE_QUERY_MEM_REGIONS = 1
@@ -524,7 +556,16 @@ def _query_drm_direct_memory(card_name: str, driver_type: str = "xe") -> tuple[i
         elif driver_type == "i915":
             try:
                 import fcntl
-                fd = os.open(node_path, os.O_RDWR | getattr(os, "O_CLOEXEC", 0))
+                fd = None
+                for open_flag in (os.O_RDWR, os.O_RDONLY):
+                    try:
+                        fd = os.open(node_path, open_flag | getattr(os, "O_CLOEXEC", 0))
+                        break
+                    except Exception:
+                        pass
+                if fd is None:
+                    continue
+
                 try:
                     # DRM_IOCTL_I915_QUERY: 0xc0106479 (_IOWR('d', 0x79, 16))
                     # DRM_I915_QUERY_MEMORY_REGIONS = 4
@@ -564,9 +605,10 @@ def _query_drm_direct_memory(card_name: str, driver_type: str = "xe") -> tuple[i
 
 
 def _query_drm_fdinfo(pci_slot: str, driver_name: str) -> dict[str, Any]:
-    """Scans /proc/*/fdinfo/* for active DRM client memory allocation and engine cycle utilization."""
+    """Scans /proc/*/fdinfo/* and /host/proc/*/fdinfo/* for active DRM client memory and engine cycle utilization."""
     res: dict[str, Any] = {"vram_used": 0, "util_pct": None}
-    if not os.path.exists("/proc"):
+    proc_bases = [p for p in ("/host/proc", "/proc") if os.path.exists(p)]
+    if not proc_bases:
         return res
 
     seen_clients: set[tuple[str, str]] = set()
@@ -576,77 +618,78 @@ def _query_drm_fdinfo(pci_slot: str, driver_name: str) -> dict[str, Any]:
 
     drv_key = "xe" if "xe" in driver_name.lower() else ("i915" if "i915" in driver_name.lower() else ("amdgpu" if "amd" in driver_name.lower() else ""))
 
-    try:
-        for pid_entry in os.listdir("/proc"):
-            if not pid_entry.isdigit():
-                continue
-            fdinfo_dir = os.path.join("/proc", pid_entry, "fdinfo")
-            if not os.path.isdir(fdinfo_dir):
-                continue
-            try:
-                for fd_file in os.listdir(fdinfo_dir):
-                    fd_path = os.path.join(fdinfo_dir, fd_file)
-                    try:
-                        with open(fd_path, "r", errors="ignore") as f:
-                            lines = f.readlines()
-                    except Exception:
-                        continue
-
-                    fd_driver = ""
-                    fd_pdev = ""
-                    fd_client = ""
-                    client_vram = 0
-                    c_active = 0
-                    c_total = 0
-
-                    for line in lines:
-                        if ":" not in line:
+    for proc_root in proc_bases:
+        try:
+            for pid_entry in os.listdir(proc_root):
+                if not pid_entry.isdigit():
+                    continue
+                fdinfo_dir = os.path.join(proc_root, pid_entry, "fdinfo")
+                if not os.path.isdir(fdinfo_dir):
+                    continue
+                try:
+                    for fd_file in os.listdir(fdinfo_dir):
+                        fd_path = os.path.join(fdinfo_dir, fd_file)
+                        try:
+                            with open(fd_path, "r", errors="ignore") as f:
+                                lines = f.readlines()
+                        except Exception:
                             continue
-                        k, v = line.split(":", 1)
-                        k = k.strip().lower()
-                        v = v.strip()
 
-                        if k == "drm-driver":
-                            fd_driver = v.lower()
-                        elif k == "drm-pdev":
-                            fd_pdev = v.lower()
-                        elif k == "drm-client-id":
-                            fd_client = v
-                        elif k in ("drm-resident-vram0", "drm-total-vram0", "drm-resident-vram", "drm-total-vram", "drm-resident-local0", "drm-total-local0"):
-                            m_val = re.match(r"(\d+)\s*([a-zA-Z]*)", v)
-                            if m_val:
-                                num = int(m_val.group(1))
-                                unit = m_val.group(2).lower()
-                                mult = 1024 if unit in ("kib", "kb", "k") else (1024**2 if unit in ("mib", "mb", "m") else (1024**3 if unit in ("gib", "gb", "g") else 1))
-                                client_vram = max(client_vram, num * mult)
-                        elif k.startswith("drm-cycles-") and not k.startswith("drm-total-cycles-"):
-                            try:
-                                c_active += int(v.split()[0])
-                            except Exception:
-                                pass
-                        elif k.startswith("drm-total-cycles-"):
-                            try:
-                                c_total += int(v.split()[0])
-                            except Exception:
-                                pass
+                        fd_driver = ""
+                        fd_pdev = ""
+                        fd_client = ""
+                        client_vram = 0
+                        c_active = 0
+                        c_total = 0
 
-                    if not fd_driver:
-                        continue
-                    if drv_key and drv_key not in fd_driver:
-                        continue
-                    if pci_slot and fd_pdev and pci_slot.lower() not in fd_pdev:
-                        continue
+                        for line in lines:
+                            if ":" not in line:
+                                continue
+                            k, v = line.split(":", 1)
+                            k = k.strip().lower()
+                            v = v.strip()
 
-                    cid_key = (fd_pdev or fd_driver, fd_client or f"{pid_entry}_{fd_file}")
-                    if cid_key not in seen_clients:
-                        seen_clients.add(cid_key)
-                        total_vram_bytes += client_vram
-                        active_cycles_sum += c_active
-                        total_cycles_sum += c_total
-            except Exception:
-                pass
-    except Exception:
-        pass
+                            if k == "drm-driver":
+                                fd_driver = v.lower()
+                            elif k == "drm-pdev":
+                                fd_pdev = v.lower()
+                            elif k == "drm-client-id":
+                                fd_client = v
+                            elif k in ("drm-resident-vram0", "drm-total-vram0", "drm-resident-vram", "drm-total-vram", "drm-resident-local0", "drm-total-local0"):
+                                m_val = re.match(r"(\d+)\s*([a-zA-Z]*)", v)
+                                if m_val:
+                                    num = int(m_val.group(1))
+                                    unit = m_val.group(2).lower()
+                                    mult = 1024 if unit in ("kib", "kb", "k") else (1024**2 if unit in ("mib", "mb", "m") else (1024**3 if unit in ("gib", "gb", "g") else 1))
+                                    client_vram = max(client_vram, num * mult)
+                            elif k.startswith("drm-cycles-") and not k.startswith("drm-total-cycles-"):
+                                try:
+                                    c_active += int(v.split()[0])
+                                except Exception:
+                                    pass
+                            elif k.startswith("drm-total-cycles-"):
+                                try:
+                                    c_total += int(v.split()[0])
+                                except Exception:
+                                    pass
+
+                        if not fd_driver:
+                            continue
+                        if drv_key and drv_key not in fd_driver:
+                            continue
+                        if pci_slot and fd_pdev and pci_slot.lower() not in fd_pdev:
+                            continue
+
+                        cid_key = (fd_pdev or fd_driver, fd_client or f"{pid_entry}_{fd_file}")
+                        if cid_key not in seen_clients:
+                            seen_clients.add(cid_key)
+                            total_vram_bytes += client_vram
+                            active_cycles_sum += c_active
+                            total_cycles_sum += c_total
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     res["vram_used"] = total_vram_bytes
 
@@ -1227,84 +1270,215 @@ _net_speed_cache: dict[str, Any] = {
     "down_bps": 0.0,
     "up_bps": 0.0,
 }
+_iface_speed_cache: dict[str, dict[str, Any]] = {}
+
+
+def _is_virtual_container_iface(name: str) -> bool:
+    """Returns True if the network interface is an internal container virtual interface."""
+    name_low = name.lower()
+    if name_low in ("lo", "docker0") or "loopback" in name_low:
+        return True
+    if name_low.startswith(("veth", "virbr", "dummy")):
+        return True
+    # Docker bridge networks are named br-<12 hex chars> e.g. br-0a1b2c3d4e5f
+    if name_low.startswith("br-") and len(name_low) >= 6:
+        suffix = name_low[3:]
+        if all(c in "0123456789abcdef" for c in suffix):
+            return True
+    return False
+
+
+def _get_host_ips_from_fib_trie(proc_root: str = "/host/proc") -> list[str]:
+    """Extracts host IP addresses from /host/proc/net/fib_trie without executing subprocesses."""
+    fib_path = os.path.join(proc_root, "net/fib_trie")
+    if not os.path.exists(fib_path):
+        return []
+    ips: list[str] = []
+    try:
+        with open(fib_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+        for i, line in enumerate(lines):
+            if "/32 host LOCAL" in line and i > 0:
+                prev = lines[i - 1].strip()
+                m = re.search(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", prev)
+                if m:
+                    ip = m.group(1)
+                    if not ip.startswith("127.") and ip not in ips:
+                        ips.append(ip)
+    except Exception:
+        pass
+    return ips
 
 
 def get_network_stats() -> dict[str, Any]:
     """Retrieves host machine network transfer rates and cumulative bandwidth telemetry."""
-    global _net_speed_cache
+    global _net_speed_cache, _iface_speed_cache
     now = time.time()
 
     raw_recv = 0
     raw_sent = 0
     interfaces: list[dict[str, Any]] = []
 
-    if psutil:
+    # Priority 1: Read host /proc/net/dev if mounted into container (/host/proc/net/dev)
+    host_proc_dev = "/host/proc/net/dev"
+    if platform.system() == "Linux" and os.path.exists(host_proc_dev):
+        try:
+            with open(host_proc_dev, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()[2:]
+
+            host_ips = _get_host_ips_from_fib_trie("/host/proc")
+
+            for line in lines:
+                parts = line.strip().split()
+                if not parts:
+                    continue
+                if_name = parts[0].rstrip(":")
+                if _is_virtual_container_iface(if_name):
+                    continue
+                r_bytes = int(parts[1]) if len(parts) > 1 else 0
+                s_bytes = int(parts[9]) if len(parts) > 9 else 0
+                raw_recv += r_bytes
+                raw_sent += s_bytes
+
+                # Determine operstate
+                is_up = True
+                oper_path = f"/host/sys/class/net/{if_name}/operstate"
+                if os.path.exists(oper_path):
+                    try:
+                        with open(oper_path, "r") as op_f:
+                            is_up = (op_f.read().strip().lower() == "up")
+                    except Exception:
+                        pass
+                elif r_bytes == 0 and s_bytes == 0:
+                    is_up = False
+
+                # Per-interface speed
+                prev_if = _iface_speed_cache.get(if_name, {"ts": 0.0, "recv": r_bytes, "sent": s_bytes, "rx_spd": 0.0, "tx_spd": 0.0})
+                if prev_if["ts"] > 0 and (now - prev_if["ts"]) >= 0.5:
+                    dt_if = now - prev_if["ts"]
+                    rx_spd = max(0.0, round((r_bytes - prev_if["recv"]) / dt_if, 1))
+                    tx_spd = max(0.0, round((s_bytes - prev_if["sent"]) / dt_if, 1))
+                else:
+                    rx_spd = prev_if.get("rx_spd", 0.0)
+                    tx_spd = prev_if.get("tx_spd", 0.0)
+                _iface_speed_cache[if_name] = {"ts": now, "recv": r_bytes, "sent": s_bytes, "rx_spd": rx_spd, "tx_spd": tx_spd}
+
+                ip_str = host_ips[0] if host_ips and if_name.startswith(("eth", "en", "wl")) else ""
+                interfaces.append({
+                    "name": if_name,
+                    "is_up": is_up,
+                    "ip": ip_str,
+                    "ips": [ip_str] if ip_str else [],
+                    "rx_speed_bytes": rx_spd,
+                    "tx_speed_bytes": tx_spd,
+                    "rx_bytes": r_bytes,
+                    "tx_bytes": s_bytes,
+                    "bytes_recv": r_bytes,
+                    "bytes_sent": s_bytes,
+                })
+        except Exception:
+            pass
+
+    # Priority 2: Use psutil (native host, Windows, or container in host-network-mode)
+    if not interfaces and psutil:
         try:
             per_nic = psutil.net_io_counters(pernic=True)
             addrs = {}
+            if_stats = {}
             try:
                 if hasattr(psutil, "net_if_addrs"):
                     addrs = psutil.net_if_addrs()
+                if hasattr(psutil, "net_if_stats"):
+                    if_stats = psutil.net_if_stats()
             except Exception:
                 pass
 
+            non_virt_count = sum(1 for ifn in per_nic if not _is_virtual_container_iface(ifn))
+
             for iface, stats in per_nic.items():
-                iface_low = iface.lower()
-                if iface_low == "lo" or "loopback" in iface_low:
+                # Filter virtual container ifaces unless that's all that exists (e.g. isolated bridge container)
+                if non_virt_count > 0 and _is_virtual_container_iface(iface):
+                    continue
+                elif iface.lower() in ("lo", "loopback"):
                     continue
 
                 raw_recv += stats.bytes_recv
                 raw_sent += stats.bytes_sent
 
                 ip_str = ""
+                all_ips = []
                 if iface in addrs:
                     for a in addrs[iface]:
                         if getattr(a, "family", None) in (2, getattr(socket, "AF_INET", 2)):
                             ip_str = a.address
-                            break
+                            all_ips.append(a.address)
+
+                is_up = True
+                if iface in if_stats:
+                    is_up = getattr(if_stats[iface], "isup", True)
+
+                # Per-interface speed
+                prev_if = _iface_speed_cache.get(iface, {"ts": 0.0, "recv": stats.bytes_recv, "sent": stats.bytes_sent, "rx_spd": 0.0, "tx_spd": 0.0})
+                if prev_if["ts"] > 0 and (now - prev_if["ts"]) >= 0.5:
+                    dt_if = now - prev_if["ts"]
+                    rx_spd = max(0.0, round((stats.bytes_recv - prev_if["recv"]) / dt_if, 1))
+                    tx_spd = max(0.0, round((stats.bytes_sent - prev_if["sent"]) / dt_if, 1))
+                else:
+                    rx_spd = prev_if.get("rx_spd", 0.0)
+                    tx_spd = prev_if.get("tx_spd", 0.0)
+                _iface_speed_cache[iface] = {"ts": now, "recv": stats.bytes_recv, "sent": stats.bytes_sent, "rx_spd": rx_spd, "tx_spd": tx_spd}
 
                 interfaces.append({
                     "name": iface,
+                    "is_up": is_up,
                     "ip": ip_str,
+                    "ips": all_ips,
+                    "rx_speed_bytes": rx_spd,
+                    "tx_speed_bytes": tx_spd,
+                    "rx_bytes": stats.bytes_recv,
+                    "tx_bytes": stats.bytes_sent,
                     "bytes_recv": stats.bytes_recv,
                     "bytes_sent": stats.bytes_sent,
                 })
         except Exception:
             pass
 
-    # Fallback to /host/proc/net/dev or /proc/net/dev on Linux if raw_recv is 0
-    if raw_recv == 0 and platform.system() == "Linux":
-        for proc_path in ("/host/proc/net/dev", "/proc/net/dev"):
-            if os.path.exists(proc_path):
-                try:
-                    with open(proc_path, "r") as f:
-                        lines = f.readlines()[2:]
-                    p_recv = 0
-                    p_sent = 0
-                    for line in lines:
-                        parts = line.strip().split()
-                        if not parts:
-                            continue
-                        if_name = parts[0].rstrip(":")
-                        if if_name == "lo":
-                            continue
-                        r_bytes = int(parts[1])
-                        s_bytes = int(parts[9])
-                        p_recv += r_bytes
-                        p_sent += s_bytes
-                        if not interfaces:
-                            interfaces.append({
-                                "name": if_name,
-                                "ip": "",
-                                "bytes_recv": r_bytes,
-                                "bytes_sent": s_bytes,
-                            })
-                    if p_recv > 0:
-                        raw_recv = p_recv
-                        raw_sent = p_sent
-                        break
-                except Exception:
-                    pass
+    # Priority 3: Fallback to /proc/net/dev on bare Linux if raw_recv is still 0
+    if raw_recv == 0 and platform.system() == "Linux" and os.path.exists("/proc/net/dev"):
+        try:
+            with open("/proc/net/dev", "r") as f:
+                lines = f.readlines()[2:]
+            p_recv = 0
+            p_sent = 0
+            for line in lines:
+                parts = line.strip().split()
+                if not parts:
+                    continue
+                if_name = parts[0].rstrip(":")
+                if if_name == "lo":
+                    continue
+                r_bytes = int(parts[1]) if len(parts) > 1 else 0
+                s_bytes = int(parts[9]) if len(parts) > 9 else 0
+                p_recv += r_bytes
+                p_sent += s_bytes
+                if not interfaces:
+                    interfaces.append({
+                        "name": if_name,
+                        "is_up": (r_bytes > 0 or s_bytes > 0),
+                        "ip": "",
+                        "ips": [],
+                        "rx_speed_bytes": 0.0,
+                        "tx_speed_bytes": 0.0,
+                        "rx_bytes": r_bytes,
+                        "tx_bytes": s_bytes,
+                        "bytes_recv": r_bytes,
+                        "bytes_sent": s_bytes,
+                    })
+            if p_recv > 0:
+                raw_recv = p_recv
+                raw_sent = p_sent
+        except Exception:
+            pass
 
     down_speed_bps = 0.0
     up_speed_bps = 0.0

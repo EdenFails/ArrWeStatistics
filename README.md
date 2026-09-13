@@ -84,6 +84,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
+    devices:
+      - /dev/dri:/dev/dri # GPU access for telemetry & IOCTL (Intel Arc, AMD)
     deploy:
       resources:
         limits:

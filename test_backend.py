@@ -445,7 +445,12 @@ def run_tests():
         daily_bw = db.get_daily_network_bandwidth()
         assert daily_bw["download_bytes"] >= 2097152, f"Expected accumulated download >= 2MB, got {daily_bw['download_bytes']}"
         assert daily_bw["upload_bytes"] >= 1048576, f"Expected accumulated upload >= 1MB, got {daily_bw['upload_bytes']}"
-        print("[+] Test 4.11.2 Passed: Daily host network bandwidth persistence verified.")
+
+        # Verify container -> host counter shift doesn't cause artificial multi-gigabyte spikes
+        res_shift = db.update_daily_network_bandwidth(100 * 1024**3, 50 * 1024**3)
+        assert res_shift["today_recv"] >= 2097152, "Expected legitimate daily bytes to be preserved on baseline shift"
+
+        print("[+] Test 4.11.2 Passed: Daily host network bandwidth persistence & dormancy carryover verified.")
 
         # Test 4.11.3: HandBrake completion heuristic at ~98% with conversion ended marker
         sample_log_completed = """
