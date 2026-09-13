@@ -679,6 +679,57 @@ const UI = {
     `;
   },
 
+  renderSystemNetworkCard(net) {
+    const downSpeed = net.download_speed_bytes || 0;
+    const upSpeed = net.upload_speed_bytes || 0;
+    const daily = net.daily || {};
+    const allTime = net.all_time || {};
+
+    const speedStr = `${fmtSpeed(downSpeed)} ↓ / ${fmtSpeed(upSpeed)} ↑`;
+
+    return `
+      <div class="card card-clickable" onclick="openSystemDetail('network')">
+        <div class="card-header">
+          <div class="card-title">
+            NETWORK I/O
+            <span class="card-type" style="color: var(--accent);">[HOST I/O]</span>
+          </div>
+          <div class="card-status-badge badge-online">${esc(speedStr)}</div>
+        </div>
+        <div class="card-body">
+          <div class="stat-grid-2" style="margin-bottom: 12px;">
+            <div class="stat-box">
+              <div class="stat-box-lbl">DOWNLOAD SPEED</div>
+              <div class="stat-box-val" style="color: var(--accent); font-size: 14px;">${fmtSpeed(downSpeed)}</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-box-lbl">UPLOAD SPEED</div>
+              <div class="stat-box-val" style="color: var(--status-up); font-size: 14px;">${fmtSpeed(upSpeed)}</div>
+            </div>
+          </div>
+
+          <div class="stat-grid-2" style="margin-bottom: 12px;">
+            <div class="stat-box">
+              <div class="stat-box-lbl">TODAY'S DOWNLOAD</div>
+              <div class="stat-box-val" style="font-size: 12px;">${fmtBytes(daily.download_bytes || 0)}</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-box-lbl">TODAY'S UPLOAD</div>
+              <div class="stat-box-val" style="font-size: 12px;">${fmtBytes(daily.upload_bytes || 0)}</div>
+            </div>
+          </div>
+
+          <div class="stat-grid-2">
+            <div class="stat-box" style="grid-column: span 2; display: flex; justify-content: space-between; align-items: center; padding: 8px 12px;">
+              <span class="stat-box-lbl" style="margin-bottom: 0;">TOTAL BANDWIDTH (TODAY / ALL-TIME)</span>
+              <span class="stat-box-val" style="font-size: 12px; font-weight: 700;">${fmtBytes(daily.total_bytes || 0)} / ${fmtBytes(allTime.total_bytes || 0)}</span>
+            </div>
+          </div>
+          <div class="card-action-hint">CLICK TO VIEW ADAPTERS &amp; BANDWIDTH DETAILS</div>
+        </div>
+      </div>
+    `;
+  },
 
   renderSystemDetailView(sys, targetId = 'cpu') {
     const cpu = sys.cpu || {};
@@ -817,6 +868,63 @@ const UI = {
           </table>
         </div>
       `}
+
+      ${sys.network ? `
+        <div class="section-title" style="margin-top: 18px; margin-bottom: 8px;">HOST NETWORK TELEMETRY &amp; ADAPTERS</div>
+        <div class="stat-grid-2" style="margin-bottom: 14px;">
+          <div class="stat-box">
+            <div class="stat-box-lbl">CURRENT TRANSFER RATE</div>
+            <div class="stat-box-val" style="font-size: 11px;">↓ ${fmtSpeed(sys.network.download_speed_bytes || 0)} &nbsp;|&nbsp; ↑ ${fmtSpeed(sys.network.upload_speed_bytes || 0)}</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-box-lbl">TODAY'S BANDWIDTH USAGE</div>
+            <div class="stat-box-val" style="font-size: 11px;">${fmtBytes((sys.network.daily && sys.network.daily.total_bytes) || 0)} (↓ ${fmtBytes((sys.network.daily && sys.network.daily.download_bytes) || 0)} / ↑ ${fmtBytes((sys.network.daily && sys.network.daily.upload_bytes) || 0)})</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-box-lbl">ALL-TIME RECORDED BANDWIDTH</div>
+            <div class="stat-box-val" style="font-size: 11px;">${fmtBytes((sys.network.all_time && sys.network.all_time.total_bytes) || 0)} (↓ ${fmtBytes((sys.network.all_time && sys.network.all_time.download_bytes) || 0)} / ↑ ${fmtBytes((sys.network.all_time && sys.network.all_time.upload_bytes) || 0)})</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-box-lbl">ACTIVE NETWORK INTERFACES</div>
+            <div class="stat-box-val" style="font-size: 11px;">${((sys.network.interfaces || []).filter(i => i.is_up).length)} ACTIVE (${(sys.network.interfaces || []).length} TOTAL)</div>
+          </div>
+        </div>
+
+        ${(sys.network.interfaces && sys.network.interfaces.length > 0) ? `
+          <div style="overflow-x: auto; border: 1px solid var(--border-dim);">
+            <table class="detail-table">
+              <thead>
+                <tr>
+                  <th>INTERFACE</th>
+                  <th>STATUS</th>
+                  <th>IP ADDRESSES</th>
+                  <th>DOWNLOAD RATE</th>
+                  <th>UPLOAD RATE</th>
+                  <th>TOTAL IN</th>
+                  <th>TOTAL OUT</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${sys.network.interfaces.map(iface => `
+                  <tr>
+                    <td style="font-weight: 600; color: var(--text-bright);">${esc(iface.name)}</td>
+                    <td>
+                      <span class="card-status-badge ${iface.is_up ? 'badge-online' : 'badge-offline'}" style="font-size: 9px; padding: 2px 6px;">
+                        ${iface.is_up ? 'UP' : 'DOWN'}
+                      </span>
+                    </td>
+                    <td style="font-family: var(--font-mono); font-size: 10px; color: var(--text-dim);">${esc((iface.ips || []).join(', ') || '-')}</td>
+                    <td style="font-family: var(--font-mono); font-size: 11px; color: var(--accent);">${fmtSpeed(iface.rx_speed_bytes || 0)}</td>
+                    <td style="font-family: var(--font-mono); font-size: 11px; color: var(--status-up);">${fmtSpeed(iface.tx_speed_bytes || 0)}</td>
+                    <td style="font-family: var(--font-mono); font-size: 11px;">${fmtBytes(iface.rx_bytes || 0)}</td>
+                    <td style="font-family: var(--font-mono); font-size: 11px;">${fmtBytes(iface.tx_bytes || 0)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : ''}
+      ` : ''}
     `;
   },
 

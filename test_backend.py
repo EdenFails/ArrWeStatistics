@@ -425,7 +425,41 @@ def run_tests():
         assert "ram" in sdata and sdata["ram"]["total_bytes"] > 0
         assert "gpus" in sdata and isinstance(sdata["gpus"], list)
         assert "hostname" in sdata
-        print("[+] Test 4.11.1 Passed: Host system hardware telemetry (CPU, RAM, GPUs) verified.")
+        assert "network" in sdata, "Missing network telemetry in system stats"
+        assert "download_speed_bytes" in sdata["network"]
+        assert "upload_speed_bytes" in sdata["network"]
+        assert "daily" in sdata["network"]
+        assert "all_time" in sdata["network"]
+        assert "interfaces" in sdata["network"]
+        print("[+] Test 4.11.1 Passed: Host system hardware telemetry (CPU, RAM, GPUs, Network) verified.")
+
+        # Test 4.11.2: Daily Network Bandwidth Tracking & Persistence
+        from clients.handbrake import parse_handbrake_log
+        import hardware
+        
+        # Test DB bandwidth update & accumulation
+        db.update_daily_network_bandwidth(1000000, 500000)
+        db.update_daily_network_bandwidth(1000000 + 2097152, 500000 + 1048576)
+        daily_bw = db.get_daily_network_bandwidth()
+        assert daily_bw["download_bytes"] >= 2097152, f"Expected accumulated download >= 2MB, got {daily_bw['download_bytes']}"
+        assert daily_bw["upload_bytes"] >= 1048576, f"Expected accumulated upload >= 1MB, got {daily_bw['upload_bytes']}"
+        print("[+] Test 4.11.2 Passed: Daily host network bandwidth persistence verified.")
+
+        # Test 4.11.3: HandBrake completion heuristic at ~98% with conversion ended marker
+        sample_log_completed = """
+[autovideoconverter] Starting conversion of '/watch/tv-sonarr/Show.S01E01.mkv'...
+Encoding: task 1 of 1, 95.40 % (35.20 fps, avg 34.10 fps, ETA 00h00m12s)
+Encoding: task 1 of 1, 98.70 % (35.10 fps, avg 34.10 fps, ETA 00h00m03s)
+[autovideoconverter] Conversion ended successfully.
+[autovideoconverter] Removing '/watch/tv-sonarr/Show.S01E01.mkv'...
+        """
+        hb_data = parse_handbrake_log(sample_log_completed)
+        assert hb_data["state"] == "idle", f"Expected idle state after conversion ended, got {hb_data['state']}"
+        assert hb_data["current_job"] is None, f"Expected current_job to be cleared, got {hb_data['current_job']}"
+        assert len(hb_data["recent_completed"]) >= 1, "Expected finished job in recent_completed"
+        assert "Show.S01E01" in hb_data["recent_completed"][0]["name"]
+        print("[+] Test 4.11.3 Passed: HandBrake 98% completion heuristic and idle state transition verified.")
+
 
         logout_res = client.post("/api/auth/logout", headers=headers)
         assert logout_res.status_code == 200

@@ -8,6 +8,7 @@ import csv
 import io
 import re
 import threading
+import socket
 from typing import Any
 
 try:
@@ -818,6 +819,155 @@ def get_gpu_stats() -> list[dict[str, Any]]:
     return all_gpus
 
 
+_net_speed_cache: dict[str, Any] = {
+    "ts": 0.0,
+    "recv": 0,
+    "sent": 0,
+    "down_bps": 0.0,
+    "up_bps": 0.0,
+}
+
+
+def get_network_stats() -> dict[str, Any]:
+    """Retrieves host machine network transfer rates and cumulative bandwidth telemetry."""
+    global _net_speed_cache
+    now = time.time()
+
+    raw_recv = 0
+    raw_sent = 0
+    interfaces: list[dict[str, Any]] = []
+
+    if psutil:
+        try:
+            per_nic = psutil.net_io_counters(pernic=True)
+            addrs = {}
+            try:
+                if hasattr(psutil, "net_if_addrs"):
+                    addrs = psutil.net_if_addrs()
+            except Exception:
+                pass
+
+            for iface, stats in per_nic.items():
+                iface_low = iface.lower()
+                if iface_low == "lo" or "loopback" in iface_low:
+                    continue
+
+                raw_recv += stats.bytes_recv
+                raw_sent += stats.bytes_sent
+
+                ip_str = ""
+                if iface in addrs:
+                    for a in addrs[iface]:
+                        if getattr(a, "family", None) in (2, getattr(socket, "AF_INET", 2)):
+                            ip_str = a.address
+                            break
+
+                interfaces.append({
+                    "name": iface,
+                    "ip": ip_str,
+                    "bytes_recv": stats.bytes_recv,
+                    "bytes_sent": stats.bytes_sent,
+                })
+        except Exception:
+            pass
+
+    # Fallback to /host/proc/net/dev or /proc/net/dev on Linux if raw_recv is 0
+    if raw_recv == 0 and platform.system() == "Linux":
+        for proc_path in ("/host/proc/net/dev", "/proc/net/dev"):
+            if os.path.exists(proc_path):
+                try:
+                    with open(proc_path, "r") as f:
+                        lines = f.readlines()[2:]
+                    p_recv = 0
+                    p_sent = 0
+                    for line in lines:
+                        parts = line.strip().split()
+                        if not parts:
+                            continue
+                        if_name = parts[0].rstrip(":")
+                        if if_name == "lo":
+                            continue
+                        r_bytes = int(parts[1])
+                        s_bytes = int(parts[9])
+                        p_recv += r_bytes
+                        p_sent += s_bytes
+                        if not interfaces:
+                            interfaces.append({
+                                "name": if_name,
+                                "ip": "",
+                                "bytes_recv": r_bytes,
+                                "bytes_sent": s_bytes,
+                            })
+                    if p_recv > 0:
+                        raw_recv = p_recv
+                        raw_sent = p_sent
+                        break
+                except Exception:
+                    pass
+
+    down_speed_bps = 0.0
+    up_speed_bps = 0.0
+
+    prev_ts = _net_speed_cache["ts"]
+    if prev_ts > 0 and (now - prev_ts) >= 0.5:
+        dt = now - prev_ts
+        d_recv = raw_recv - _net_speed_cache["recv"]
+        d_sent = raw_sent - _net_speed_cache["sent"]
+        if d_recv >= 0:
+            down_speed_bps = round(d_recv / dt, 1)
+        if d_sent >= 0:
+            up_speed_bps = round(d_sent / dt, 1)
+        _net_speed_cache["down_bps"] = down_speed_bps
+        _net_speed_cache["up_bps"] = up_speed_bps
+    else:
+        down_speed_bps = _net_speed_cache.get("down_bps", 0.0)
+        up_speed_bps = _net_speed_cache.get("up_bps", 0.0)
+
+    _net_speed_cache["ts"] = now
+    _net_speed_cache["recv"] = raw_recv
+    _net_speed_cache["sent"] = raw_sent
+
+    try:
+        import database as db
+        db.update_daily_network_bandwidth(raw_recv, raw_sent)
+        full_daily = db.get_daily_network_bandwidth()
+    except Exception:
+        full_daily = {
+            "today_recv_bytes": 0,
+            "today_sent_bytes": 0,
+            "all_time_recv_bytes": raw_recv,
+            "all_time_sent_bytes": raw_sent,
+        }
+
+    daily_rx = full_daily.get("today_recv_bytes", 0)
+    daily_tx = full_daily.get("today_sent_bytes", 0)
+    all_rx = full_daily.get("all_time_recv_bytes", 0)
+    all_tx = full_daily.get("all_time_sent_bytes", 0)
+
+    return {
+        "download_speed_bytes": down_speed_bps,
+        "upload_speed_bytes": up_speed_bps,
+        "total_recv_bytes": raw_recv,
+        "total_sent_bytes": raw_sent,
+        "today_recv_bytes": daily_rx,
+        "today_sent_bytes": daily_tx,
+        "all_time_recv_bytes": all_rx,
+        "all_time_sent_bytes": all_tx,
+        "daily": {
+            "date": full_daily.get("date"),
+            "download_bytes": daily_rx,
+            "upload_bytes": daily_tx,
+            "total_bytes": daily_rx + daily_tx,
+        },
+        "all_time": {
+            "download_bytes": all_rx,
+            "upload_bytes": all_tx,
+            "total_bytes": all_rx + all_tx,
+        },
+        "interfaces": interfaces,
+    }
+
+
 def get_system_overview() -> dict[str, Any]:
     """Provides cached, non-blocking hardware metrics for the host server."""
     global _stats_cache
@@ -829,6 +979,7 @@ def get_system_overview() -> dict[str, Any]:
     cpu_data = get_cpu_stats()
     ram_data = get_ram_stats()
     gpu_data = get_gpu_stats()
+    net_data = get_network_stats()
 
     uptime_s = 0.0
     if psutil:
@@ -844,6 +995,7 @@ def get_system_overview() -> dict[str, Any]:
         "cpu": cpu_data,
         "ram": ram_data,
         "gpus": gpu_data,
+        "network": net_data,
         "timestamp": now,
     }
 
@@ -852,3 +1004,4 @@ def get_system_overview() -> dict[str, Any]:
         _stats_cache["data"] = overview
 
     return overview
+

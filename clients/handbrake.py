@@ -20,7 +20,7 @@ ENCODING_REGEX = re.compile(
 
 FINISHED_REGEX = re.compile(
     r"(?:\[(?P<tag>[^\]]+)\]\s*)?"
-    r"(?:Finished|Completed|Done|Rip done|Converted)(?:\s+encoding|\s+conversion)?(?::|\s+)\s*(?P<detail>.+)",
+    r"(?:Finished|Completed|Done|Rip done|Converted|Conversion ended(?:\s+successfully)?|Removing)(?:\s+encoding|\s+conversion)?(?::|\s+)\s*(?P<detail>.+)",
     re.IGNORECASE,
 )
 
@@ -31,9 +31,12 @@ IDLE_KEYWORDS = (
     "no files to convert",
     "queue finished",
     "queue is empty",
+    "conversion ended",
+    "conversion ended successfully",
     "idle",
     "sleeping for",
 )
+
 
 
 def _format_eta(eta_str: str) -> str:
@@ -116,7 +119,8 @@ def parse_handbrake_log(log_content: str) -> dict[str, Any]:
 
     # Search from latest lines backward to find current state
     encoding_found = False
-    for line in reversed(lines):
+    last_enc_index = -1
+    for idx, line in enumerate(reversed(lines)):
         m_enc = ENCODING_REGEX.search(line)
         if m_enc:
             d = m_enc.groupdict()
@@ -144,6 +148,7 @@ def parse_handbrake_log(log_content: str) -> dict[str, Any]:
             state = "encoding"
             state_label = f"ENCODING ({prog:.1f}%)"
             encoding_found = True
+            last_enc_index = len(lines) - 1 - idx
             break
 
         # Check if line indicates idle / waiting
@@ -152,23 +157,42 @@ def parse_handbrake_log(log_content: str) -> dict[str, Any]:
             state = "idle"
             state_label = "IDLE / WAITING"
             break
-        if "finished" in lower or "completed" in lower or "rip done" in lower:
+        if "finished" in lower or "completed" in lower or "rip done" in lower or "conversion ended" in lower:
             state = "completed"
             state_label = "LAST CONVERSION FINISHED"
             break
 
     # If encoding was found, verify whether subsequent lines finished it
+    completed_from_active = None
     if encoding_found and current_job:
-        last_line_lower = lines[-1].lower()
-        if any(kw in last_line_lower for kw in IDLE_KEYWORDS):
-            # It just finished and is now idle
+        subsequent_lines = lines[last_enc_index + 1:] if last_enc_index >= 0 else []
+        subsequent_text = " ".join(subsequent_lines).lower()
+
+        has_idle = any(kw in subsequent_text for kw in IDLE_KEYWORDS)
+        has_finished = any(k in subsequent_text for k in ("conversion ended", "finished", "completed", "removing", "rip done", "muxing finished"))
+
+        # Heuristic: If progress >= 90% and subsequent lines exist (e.g. Conversion ended, Removing, Watching), assume finished
+        if has_idle or has_finished or (current_job["progress_percent"] >= 90.0 and subsequent_lines):
             state = "idle"
             state_label = "IDLE / WAITING"
+            clean = current_job["filename"]
+            completed_from_active = {
+                "name": clean,
+                "raw": f"Conversion ended: {clean}",
+                "filename": clean,
+                "title": current_job["title"],
+                "category": current_job["category"],
+            }
             current_job = None
+
 
     # Find recently completed files in log
     recent_completed = []
     seen_completed = set()
+    if completed_from_active:
+        seen_completed.add(completed_from_active["filename"])
+        recent_completed.append(completed_from_active)
+
     for line in reversed(lines):
         m_fin = FINISHED_REGEX.search(line)
         if m_fin:
@@ -177,11 +201,13 @@ def parse_handbrake_log(log_content: str) -> dict[str, Any]:
             if clean not in seen_completed and len(recent_completed) < 8:
                 seen_completed.add(clean)
                 recent_completed.append({
+                    "name": clean,
                     "raw": detail,
                     "filename": clean,
                     "title": _clean_title(clean),
                     "category": _extract_category(detail),
                 })
+
 
     log_tail = lines[-20:]
 

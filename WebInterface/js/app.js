@@ -599,6 +599,10 @@ function renderSystemCards() {
         cardsHtml.push(UI.renderSystemGpuCard(g));
       });
     }
+
+    if (sys.network) {
+      cardsHtml.push(UI.renderSystemNetworkCard(sys.network));
+    }
   }
 
   if (state.storagePools && state.storagePools.length > 0) {
@@ -625,7 +629,13 @@ window.openSystemDetail = function(target = 'cpu') {
 
   const titleEl = document.getElementById('detail-title');
   if (titleEl) {
-    titleEl.textContent = target === 'cpu' ? 'HOST PROCESSOR & MEMORY TELEMETRY' : 'GRAPHICS ADAPTER TELEMETRY';
+    if (target === 'cpu') {
+      titleEl.textContent = 'HOST PROCESSOR & MEMORY TELEMETRY';
+    } else if (target === 'network') {
+      titleEl.textContent = 'HOST NETWORK TELEMETRY & I/O';
+    } else {
+      titleEl.textContent = 'GRAPHICS ADAPTER TELEMETRY';
+    }
   }
   updateSystemDetailView();
   document.getElementById('overlay-service-detail').classList.remove('hidden');

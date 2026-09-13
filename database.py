@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from typing import Any
 
 DB_PATH = os.getenv("DB_PATH", "data/arrwestatistics.db")
 
@@ -88,12 +89,24 @@ def init_db() -> None:
         )
     """)
 
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS network_bandwidth_daily (
+            date_key TEXT PRIMARY KEY,
+            bytes_recv INTEGER DEFAULT 0,
+            bytes_sent INTEGER DEFAULT 0,
+            last_raw_recv INTEGER DEFAULT 0,
+            last_raw_sent INTEGER DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     c.execute("CREATE INDEX IF NOT EXISTS idx_service_metrics_service_id ON service_metrics(service_id);")
     c.execute("CREATE INDEX IF NOT EXISTS idx_services_display_order ON services(display_order);")
     c.execute("CREATE INDEX IF NOT EXISTS idx_storage_mounts_order ON storage_mounts(display_order);")
 
     conn.commit()
     conn.close()
+
 
 
 def has_auth() -> bool:
@@ -476,7 +489,90 @@ def update_storage_stats(
     conn.close()
 
 
+def update_daily_network_bandwidth(raw_recv: int, raw_sent: int) -> dict[str, int]:
+    """Updates daily network bandwidth counters based on raw cumulative bytes from system."""
+    import datetime
+    today = datetime.date.today().isoformat()
+    conn = get_conn()
+    c = conn.cursor()
+
+    row = c.execute(
+        "SELECT bytes_recv, bytes_sent, last_raw_recv, last_raw_sent FROM network_bandwidth_daily WHERE date_key = ?",
+        (today,),
+    ).fetchone()
+
+    if not row:
+        c.execute(
+            """
+            INSERT INTO network_bandwidth_daily (date_key, bytes_recv, bytes_sent, last_raw_recv, last_raw_sent, updated_at)
+            VALUES (?, 0, 0, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (today, raw_recv, raw_sent),
+        )
+        conn.commit()
+        conn.close()
+        return {"today_recv": 0, "today_sent": 0}
+
+    cur_recv = row["bytes_recv"]
+    cur_sent = row["bytes_sent"]
+    last_raw_recv = row["last_raw_recv"]
+    last_raw_sent = row["last_raw_sent"]
+
+    d_recv = raw_recv - last_raw_recv if (raw_recv >= last_raw_recv and last_raw_recv > 0) else 0
+    d_sent = raw_sent - last_raw_sent if (raw_sent >= last_raw_sent and last_raw_sent > 0) else 0
+
+    new_recv = cur_recv + d_recv
+    new_sent = cur_sent + d_sent
+
+    c.execute(
+        """
+        UPDATE network_bandwidth_daily
+        SET bytes_recv = ?, bytes_sent = ?, last_raw_recv = ?, last_raw_sent = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE date_key = ?
+        """,
+        (new_recv, new_sent, raw_recv, raw_sent, today),
+    )
+    conn.commit()
+    conn.close()
+    return {"today_recv": new_recv, "today_sent": new_sent}
+
+
+def get_daily_network_bandwidth() -> dict[str, Any]:
+    """Returns today's cumulative network bandwidth and all-time total."""
+    import datetime
+    today = datetime.date.today().isoformat()
+    conn = get_conn()
+    c = conn.cursor()
+
+    row = c.execute(
+        "SELECT bytes_recv, bytes_sent FROM network_bandwidth_daily WHERE date_key = ?",
+        (today,),
+    ).fetchone()
+
+    total_row = c.execute(
+        "SELECT SUM(bytes_recv) as total_recv, SUM(bytes_sent) as total_sent FROM network_bandwidth_daily"
+    ).fetchone()
+
+    conn.close()
+
+    today_recv = row["bytes_recv"] if row else 0
+    today_sent = row["bytes_sent"] if row else 0
+    all_time_recv = (total_row["total_recv"] or 0) if total_row else 0
+    all_time_sent = (total_row["total_sent"] or 0) if total_row else 0
+
+    return {
+        "date": today,
+        "today_recv_bytes": today_recv,
+        "today_sent_bytes": today_sent,
+        "download_bytes": today_recv,
+        "upload_bytes": today_sent,
+        "all_time_recv_bytes": all_time_recv,
+        "all_time_sent_bytes": all_time_sent,
+    }
+
+
 connect_db = get_conn
+
 create_tables = init_db
 is_auth_initialized = has_auth
 get_auth = read_auth
